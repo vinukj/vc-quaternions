@@ -1,0 +1,22 @@
+# ESP-IDF generated state and build outputs
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/bootloader/
+firmware/partition_table/
+
+# Local tooling and operating-system files
+.DS_Store
+.crush/
+*.log
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated archives and local analysis data
+*.zip
+*.xlsx

@@ -1,0 +1,27 @@
+idf_component_register(SRCS
+        "main.c"
+        "ble/ble_server.c"
+        "imu_bluetooth_task.c"
+        "drivers/qmi8658.c"
+        "drivers/cst816s.c"
+        "drivers/lcd_display.c"
+        "../components/madgwick/madgwick.c"
+    INCLUDE_DIRS
+        "."
+        "../components/madgwick"
+    REQUIRES
+        bt
+        esp_lcd
+        esp_lcd_gc9a01
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_ledc
+        esp_driver_spi
+        esp_driver_uart
+        nvs_flash
+        esp_timer
+        freertos
+        spi_flash
+        fatfs
+        vfs
+)

@@ -1,0 +1,1545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PowerplAi Tracker — Cricket Bat Motion</title>
+  <link rel="icon" href="data:," />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      gap: 14px;
+      padding: 14px 12px 30px;
+    }
+
+    h1 { font-size: 1.5rem; color: #58a6ff; letter-spacing: 2px; }
+    .subtitle { font-size: 0.7rem; color: #484f58; letter-spacing: 1.5px; }
+
+    /* ── Top bar ───────────────────────────────────────────────────── */
+    .topbar { width: 100%; max-width: 1000px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .title-wrap { display: flex; flex-direction: column; gap: 2px; }
+
+    #btn-connect {
+      padding: 10px 28px; font-size: 0.9rem; border: none; border-radius: 8px;
+      cursor: pointer; font-weight: 700; background: #238636; color: #fff;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    #btn-connect:hover:not(:disabled) { background: #2ea043; }
+    #btn-connect:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-connect.reconnect { background: #d29922; }
+    .connection-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    #btn-take-stance {
+      padding: 10px 14px; font-size: 0.85rem; border: 1px solid #1f6feb; border-radius: 8px;
+      cursor: pointer; font-weight: 700; background: #1f6feb; color: #fff;
+    }
+    #btn-take-stance:hover:not(:disabled) { background: #2f81f7; }
+    #btn-take-stance:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-disconnect {
+      padding: 10px 14px; font-size: 0.85rem; border: 1px solid #484f58; border-radius: 8px;
+      cursor: pointer; font-weight: 700; background: #21262d; color: #e6edf3;
+    }
+    #btn-disconnect:hover:not(:disabled) { background: #30363d; }
+    #btn-disconnect:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #status { font-size: 0.78rem; color: #484f58; letter-spacing: 1px; }
+    #status.ok  { color: #3fb950; }
+    #status.err { color: #f85149; }
+
+    /* ── Practice screen ───────────────────────────────────────────── */
+    #practice { width: 100%; max-width: 1120px; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr); gap: 14px; align-items: stretch; }
+
+    /* ── 3D view ───────────────────────────────────────────────────── */
+    #canvas-wrap {
+      width: 100%; height: 300px;
+      background: #161b22; border: 2px solid #21262d; border-radius: 14px;
+      position: relative; overflow: hidden;
+    }
+    #canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+    #canvas-wrap.preview-unavailable #render-canvas { visibility: hidden; }
+    #canvas-overlay {
+      position: absolute; top: 8px; left: 10px; font-size: 0.72rem;
+      color: #8b949e; pointer-events: none;
+    }
+    #canvas-wrap.preview-unavailable #canvas-overlay {
+      inset: 0; display: grid; place-items: center; padding: 24px;
+      text-align: center; font-size: 0.9rem;
+    }
+
+    #track-panel, #practice-controls {
+      background: #161b22; border: 2px solid #21262d; border-radius: 14px;
+      padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px;
+      min-width: 0;
+    }
+    #track-panel { justify-content: flex-start; }
+    #practice-controls { justify-content: center; }
+    #track-heading { width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    #track-heading h2 { font-size: 0.95rem; }
+    #track-hint { color: #8b949e; font-size: 0.68rem; text-align: right; }
+    .ground-visual { position: relative; width: 100%; min-width: 0; }
+    #track-canvas { display: block; width: 100%; height: 500px; touch-action: none; }
+    .field-callout {
+      position: absolute; top: 12px; left: 12px; z-index: 1; max-width: min(310px, calc(100% - 24px));
+      display: flex; flex-direction: column; gap: 3px; padding: 8px 11px;
+      border: 1px solid rgba(225, 244, 206, 0.3); border-radius: 8px;
+      background: rgba(12, 27, 18, 0.88); color: #f4f7ed; pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    }
+    #field-callout-title { overflow: hidden; color: #e2ffad; font-size: 0.8rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    #field-callout-detail { color: #d7e6ce; font-size: 0.68rem; line-height: 1.25; }
+    .field-callout[data-mode="live"] { border-color: rgba(88, 166, 255, 0.55); }
+    .field-callout[data-mode="live"] #field-callout-title { color: #79c0ff; }
+    .field-callout[data-mode="result"] { border-color: rgba(226, 255, 173, 0.65); }
+    .ground-controls { display: flex; align-items: center; justify-content: center; gap: 8px; color: #8b949e; font-size: 0.75rem; }
+    #batting-hand { padding: 5px 8px; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #e6edf3; font: inherit; }
+    #track-footnote { max-width: 560px; color: #6e7681; font-size: 0.65rem; text-align: center; line-height: 1.35; }
+    .main-actions { width: 100%; display: grid; grid-template-columns: 1fr; gap: 8px; }
+    #mouse-status { min-height: 1.4em; color: #58a6ff; font-size: 0.9rem; font-weight: 750; text-align: center; }
+    #capture-readout { min-height: 1.2em; color: #e6edf3; font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+    #capture-readout[data-state="capturing"] { color: #3fb950; }
+    #capture-readout[data-state="error"] { color: #f85149; }
+    #capture-instruction { min-height: 2.4em; max-width: 330px; text-align: center; color: #8b949e; font-size: 0.78rem; line-height: 1.35; }
+    #mouse-message { min-height: 2.4em; text-align: center; color: #8b949e; font-size: 0.78rem; line-height: 1.35; }
+    #mouse-message[data-kind="error"] { color: #f85149; }
+    #mouse-message[data-kind="success"] { color: #3fb950; }
+    #stance-reference, #game-config-status { max-width: 420px; color: #8b949e; font-size: 0.72rem; line-height: 1.4; text-align: center; }
+    #stance-reference[data-state="set"], #game-config-status[data-state="acknowledged"] { color: #3fb950; }
+    #game-config-status[data-state="error"] { color: #f85149; }
+    #btn-air-mouse, #btn-shot-start {
+      width: 100%; min-height: 58px; padding: 12px 16px;
+      border: 0; border-radius: 10px; background: #238636; color: #fff;
+      font: inherit; font-size: 1.1rem; font-weight: 800; letter-spacing: 0.03em; cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    #btn-air-mouse:hover:not(:disabled), #btn-shot-start:hover:not(:disabled) { background: #2ea043; }
+    #btn-air-mouse { background: #30363d; border: 1px solid #484f58; }
+    #btn-air-mouse:hover:not(:disabled) { background: #484f58; }
+    #btn-air-mouse.active { background: #b62324; border-color: #f85149; }
+    #btn-air-mouse.active:hover:not(:disabled) { background: #da3633; }
+    #btn-air-mouse:disabled, #btn-shot-start:disabled { opacity: 0.45; cursor: not-allowed; }
+    .advanced { width: 100%; max-width: 1120px; border: 1px solid #30363d; border-radius: 10px; background: #0d1117; }
+    .advanced > summary { cursor: pointer; padding: 11px 14px; color: #8b949e; font-size: 0.8rem; }
+    .advanced-content { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 0 12px 14px; }
+
+    /* ── Controls ──────────────────────────────────────────────────── */
+    .controls { width: 100%; max-width: 900px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .controls button {
+      padding: 8px 10px; font-size: 0.8rem; border: 1px solid #30363d;
+      border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .controls button:hover { background: #30363d; }
+    .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .controls button.primary { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    .controls button.primary:hover { background: #2f81f7; }
+
+    /* ── Result card ───────────────────────────────────────────────── */
+    #shot-card {
+      width: 100%; max-width: 440px; background: #161b22; border: 2px solid #21262d;
+      border-radius: 14px; padding: 16px 20px;
+      display: none; flex-direction: column; gap: 6px;
+    }
+    #shot-card.new { animation: flash 0.5s ease-out; border-color: #ffa657; }
+    #game-config, #game-outcome-card { width: 100%; max-width: 440px; border: 1px solid #30363d; border-radius: 10px; background: #0d1117; }
+    #game-config > summary { cursor: pointer; padding: 10px 12px; color: #8b949e; font-size: 0.78rem; }
+    #game-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 12px 12px; }
+    #game-config-grid label { display: flex; flex-direction: column; gap: 4px; color: #8b949e; font-size: 0.68rem; }
+    #game-config-grid select, #game-config-grid input { min-width: 0; padding: 7px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #e6edf3; font: inherit; }
+    #game-outcome-card { padding: 12px; }
+    #game-outcome-card h3 { color: #58a6ff; font-size: 0.85rem; margin-bottom: 6px; }
+    #game-outcome-summary { color: #e6edf3; font-size: 0.9rem; font-weight: 700; margin-bottom: 8px; }
+    #game-outcome-json { overflow: auto; max-height: 280px; padding: 9px; border-radius: 6px; background: #161b22; color: #c9d1d9; font: 0.68rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #stance-dialog { width: min(420px, calc(100% - 28px)); margin: auto; padding: 22px; border: 1px solid #484f58; border-radius: 14px; background: #161b22; color: #e6edf3; box-shadow: 0 20px 70px #000a; }
+    #stance-dialog::backdrop { background: #000b; }
+    #stance-dialog h2 { margin-bottom: 10px; color: #79c0ff; font-size: 1.1rem; }
+    #stance-instruction { min-height: 3.4em; color: #c9d1d9; line-height: 1.45; }
+    #stance-progress { margin: 16px 0; color: #e2ffad; font-size: 1.2rem; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+    #stance-cancel { display: block; margin-left: auto; padding: 8px 14px; border: 1px solid #484f58; border-radius: 7px; background: #21262d; color: #e6edf3; font: inherit; cursor: pointer; }
+    @keyframes flash { 0% { border-color: #ffa657; } 100% { border-color: #3fb950; } }
+
+    @media (max-width: 850px) {
+      #practice { grid-template-columns: minmax(0, 1fr); }
+      #practice-controls { justify-content: flex-start; }
+      #canvas-wrap { height: 270px; }
+      #track-canvas { height: clamp(300px, 78vw, 460px); }
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      .topbar { align-items: flex-start; }
+      #btn-connect { padding: 10px 14px; }
+      .history-entry dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 420px) {
+      .history-entry dl { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+
+    #shot-name { font-size: 1.6rem; font-weight: 800; color: #ffa657; min-height: 2.2rem; }
+    #shot-meta { font-size: 0.8rem; color: #8b949e; display: flex; flex-wrap: wrap; gap: 12px; }
+    #shot-meta span { display: flex; align-items: center; gap: 4px; }
+
+    /* ── Debug panel ───────────────────────────────────────────────── */
+    #debug {
+      width: 100%; max-width: 900px; background: #0d1117; border: 1px solid #21262d;
+      border-radius: 12px; padding: 12px 14px; font-family: 'Consolas', monospace;
+      font-size: 0.7rem; color: #8b949e;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    }
+    #debug .col { display: flex; flex-direction: column; gap: 4px; }
+    #debug .col h3 { font-size: 0.68rem; color: #58a6ff; text-transform: uppercase; }
+    #debug .col div { white-space: pre; line-height: 1.3; }
+
+    /* ── Tuning sliders ───────────────────────────────────────────── */
+    #tuning {
+      width: 100%; max-width: 900px; background: #0d1117; border: 1px solid #21262d;
+      border-radius: 12px; padding: 12px 14px; font-size: 0.75rem;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    }
+    #tuning label { display: flex; flex-direction: column; gap: 4px; }
+    #tuning label span { color: #8b949e; font-size: 0.65rem; }
+    #tuning input[type=range] { width: 100%; }
+    #tuning .val { color: #58a6ff; }
+
+    /* ── Swing history ────────────────────────────────────────────── */
+    #history {
+      width: 100%; max-width: 1120px; background: #0d1117; border: 1px solid #21262d;
+      border-radius: 12px; padding: 12px 14px;
+    }
+    #history-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    #history-heading h2 { font-size: 0.85rem; color: #58a6ff; }
+    #history-toggle {
+      padding: 6px 10px; border: 1px solid #30363d; border-radius: 6px;
+      background: #161b22; color: #e6edf3; font: inherit; font-size: 0.72rem;
+      cursor: pointer;
+    }
+    #history-toggle:hover { background: #21262d; }
+    #history-actions { display: flex; align-items: center; gap: 8px; }
+    #history-actions button:not(#history-toggle) {
+      width: 34px; height: 34px; display: grid; place-items: center;
+      border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #e6edf3;
+      cursor: pointer;
+    }
+    #history-actions button:not(#history-toggle):hover:not(:disabled) { background: #21262d; color: #79c0ff; }
+    #history-actions button:not(#history-toggle):disabled { opacity: 0.4; cursor: not-allowed; }
+    #history-actions button svg { width: 17px; height: 17px; }
+    #history-list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; margin-top: 10px; }
+    .history-entry { padding: 10px; border: 1px solid #21262d; border-radius: 8px; background: #161b22; }
+    .history-entry h3 { margin-bottom: 8px; color: #8b949e; font-size: 0.72rem; }
+    .history-entry dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+    .history-entry dt { color: #8b949e; font-size: 0.65rem; }
+    .history-entry dd { overflow-wrap: anywhere; color: #e6edf3; font-size: 0.75rem; }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    footer { font-size: 0.7rem; color: #484f58; text-align: center; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="title-wrap">
+      <h1>PowerplAi</h1>
+      <p class="subtitle">PowerplAi Tracker · ESP32-S3 · live BLE</p>
+    </div>
+    <div>
+      <div class="connection-actions">
+        <button id="btn-connect">Connect to Bat</button>
+        <button id="btn-disconnect" disabled>Disconnect</button>
+        <button id="btn-take-stance" type="button" disabled>Take Stance · 3 s</button>
+      </div>
+      <p id="status">Not connected</p>
+    </div>
+  </div>
+
+  <main id="practice">
+    <section id="track-panel" aria-labelledby="track-title">
+      <div id="track-heading">
+        <h2 id="track-title">Shot map</h2>
+        <span id="track-hint">Ready when connected</span>
+      </div>
+      <div class="ground-visual">
+        <canvas id="track-canvas" role="img" aria-label="Cricket wagon-wheel ground. The bat movement trail starts at the pitch and points toward the estimated shot sector."></canvas>
+        <div id="field-callout" class="field-callout" data-mode="ready" aria-live="polite">
+          <span id="field-callout-title">Shot map</span>
+          <span id="field-callout-detail">Press START on the bat to capture a shot</span>
+        </div>
+      </div>
+      <label class="ground-controls" for="batting-hand">Batter stance
+        <select id="batting-hand" aria-label="Batter handedness">
+          <option value="right" selected>Right-handed</option>
+          <option value="left">Left-handed</option>
+        </select>
+      </label>
+      <p id="track-footnote">Direction follows the dominant swing lobe through its speed peak; slower late follow-through is excluded. Mount: display faces the batter, +X points down the bat toward the handle, and axial X-roll is ignored; Y/Z provide the screen-plane direction. These are IMU estimates, and signed field directions still need calibration with real swings.</p>
+    </section>
+    <section id="practice-controls" aria-label="Shot capture controls">
+      <div id="mouse-status" aria-live="polite">No shot captured</div>
+      <div id="capture-readout" data-state="ready" aria-live="polite">Ready</div>
+      <div id="capture-instruction">Connect the bat, apply game settings, then take your stance before starting a shot.</div>
+      <p id="stance-reference" data-state="unset" role="status" aria-live="polite">Stance reference not set. Connect and take stance; the saved pose becomes Straight · 0° for this session.</p>
+      <div id="mouse-message" data-kind="info">Connect to the bat, confirm the game settings, then hold your batting stance steady for 3 seconds. The stance is kept for this BLE session.</div>
+      <div class="main-actions">
+        <button id="btn-air-mouse" type="button" aria-pressed="false" disabled>Start PowerplAi Tracker</button>
+      </div>
+      <details id="game-config" open>
+        <summary id="game-config-summary">Game config · Dry pitch · 525 ms</summary>
+        <p id="game-config-status" data-state="pending" role="status" aria-live="polite">Settings will be sent to and acknowledged by the ESP32 after connecting. Sensor notifications remain at 50 Hz.</p>
+        <div id="game-config-grid">
+          <label for="game-difficulty">Pitch difficulty
+            <select id="game-difficulty">
+              <option value="dry_pitch">Dry pitch</option>
+              <option value="green_pitch">Green pitch</option>
+              <option value="flat_pitch">Flat pitch</option>
+            </select>
+          </label>
+          <label for="game-bowled-prob">Bowled chance per 100 balls
+            <input id="game-bowled-prob" type="number" min="0" max="100" step="1" value="3">
+          </label>
+          <label for="game-edge-prob">Edge chance per 100 balls
+            <input id="game-edge-prob" type="number" min="0" max="100" step="1" value="10">
+          </label>
+          <label for="game-capture-window-ms">Capture window
+            <select id="game-capture-window-ms">
+              <option value="400">400 ms</option>
+              <option value="500">500 ms</option>
+              <option value="525" selected>525 ms</option>
+              <option value="600">600 ms</option>
+              <option value="700">700 ms</option>
+              <option value="800">800 ms</option>
+              <option value="900">900 ms</option>
+            </select>
+          </label>
+        </div>
+      </details>
+      <div id="shot-card" role="status" aria-live="polite">
+        <div id="shot-name">—</div>
+        <div id="shot-meta"></div>
+      </div>
+      <section id="game-outcome-card" aria-labelledby="game-outcome-title" aria-live="polite" hidden>
+        <h3 id="game-outcome-title">Game layer · browser simulation</h3>
+        <p id="game-outcome-summary"></p>
+        <pre id="game-outcome-json"></pre>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="stance-dialog" aria-labelledby="stance-title" aria-describedby="stance-instruction stance-progress">
+    <h2 id="stance-title">Take your stance</h2>
+    <p id="stance-instruction">Stand in your batting stance and hold the bat still. Keep the ESP32 display facing you.</p>
+    <p id="stance-progress" aria-live="polite">Waiting to begin…</p>
+    <button id="stance-cancel" type="button">Cancel</button>
+  </dialog>
+
+  <details class="advanced" id="advanced-tools">
+    <summary>Advanced tools and diagnostics</summary>
+    <div class="advanced-content">
+      <div id="canvas-wrap" class="preview-unavailable">
+        <canvas id="render-canvas"></canvas>
+        <div id="canvas-overlay">Optional 3D orientation preview · loading on demand</div>
+      </div>
+      <p class="muted">Manual guard controls are available only before a session stance is set.</p>
+      <div class="controls">
+        <button id="btn-guard" class="primary" disabled>[ Take Guard ]</button>
+        <button id="btn-recenter" disabled>[ Recenter ]</button>
+        <button id="btn-reset" disabled>[ Full Reset ]</button>
+        <button id="btn-clear" disabled>[ Clear Ref ]</button>
+      </div>
+      <div id="tuning">
+        <label>Swing threshold<br><span id="lbl-threshold">2.0 rad/s</span></label>
+        <input type="range" id="slider-threshold" min="0.5" max="5.0" step="0.1" value="2.0">
+        <label>Plane boundary 1<br><span id="lbl-bound1">30°</span></label>
+        <input type="range" id="slider-bound1" min="10" max="60" step="5" value="30">
+        <label>Height boundary<br><span id="lbl-height">30°</span></label>
+        <input type="range" id="slider-height" min="10" max="60" step="5" value="30">
+        <label>Power Low<br><span id="lbl-powerlo">3.0 rad/s</span></label>
+        <input type="range" id="slider-powerlo" min="1" max="8" step="0.5" value="3.0">
+        <label>Power High<br><span id="lbl-powerhi">6.0 rad/s</span></label>
+        <input type="range" id="slider-powerhi" min="4" max="12" step="0.5" value="6.0">
+        <label>Coord offset X<br><span id="lbl-coord">-90°</span></label>
+        <input type="range" id="slider-coord" min="-180" max="180" step="15" value="-90">
+      </div>
+      <div id="debug">
+        <div class="col"><h3>Quaternion</h3><div id="dbg-q">w: — x: — y: — z: —</div></div>
+        <div class="col"><h3>Packet rate</h3><div id="dbg-rate">0 Hz</div></div>
+        <div class="col"><h3>Swing log</h3><div id="dbg-swing">—</div></div>
+      </div>
+    </div>
+  </details>
+
+  <section id="history" aria-labelledby="history-title">
+    <div id="history-heading">
+      <h2 id="history-title">Shot history (0)</h2>
+      <div id="history-actions">
+        <button id="history-download" type="button" aria-label="Download shot history as CSV" title="Download shot history as CSV" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 16v4h14v-4"/></svg>
+        </button>
+        <button id="history-clear" type="button" aria-label="Clear shot history" title="Clear shot history" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg>
+        </button>
+        <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history-list">Show history ▼</button>
+      </div>
+    </div>
+    <div id="history-list" role="list" hidden></div>
+  </section>
+
+  <footer>
+    Serve via <code>python3 -m http.server</code> (Web Bluetooth needs HTTPS or localhost)
+  </footer>
+
+  <script src="bat-screen-frame.js"></script>
+  <script src="direction-tracker.js"></script>
+  <script src="wagon-wheel.js"></script>
+  <script src="shot-classifier.js"></script>
+  <script src="game-layer.js"></script>
+  <script src="shot-report.js"></script>
+  <script src="shot-history.js"></script>
+  <script src="shot-practice.js"></script>
+  <script src="quaternion-packet-gate.js"></script>
+  <script src="shot-guard.js"></script>
+  <script src="device-shot-control.js"></script>
+  <script src="ble-command-queue.js"></script>
+  <script src="stream-recovery.js"></script>
+  <script src="device-config.js"></script>
+  <script src="stance-calibration.js"></script>
+  <script src="ble-session-setup.js"></script>
+  <script>
+    // ── BLE UUIDs (per vc.md spec) ──────────────────────────────────
+    const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+    const NOTIFY_UUID  = '12345678-1234-1234-1234-123456789abd';
+    const CMD_UUID     = '12345678-1234-1234-1234-123456789abe';
+    const STATE_UUID   = '12345678-1234-1234-1234-123456789abf';
+
+    // ── Tunable parameters (also exposed on-device via command 0x05?) ──
+    let params = {
+      swingThresholdRad: 2.0,   // rad/s — swing detection
+      planeBound1: 30,          // deg
+      heightBound: 30,          // deg
+      powerLow: 3.0,            // rad/s
+      powerHigh: 6.0,           // rad/s
+      coordOffsetDeg: -90,      // X-axis rotation (Z-up → Y-up)
+    };
+
+    // ── UI state ────────────────────────────────────────────────────
+    let device = null;
+    let server = null;
+    let notifyChar = null;
+    let cmdChar  = null;
+    let stateChar = null;
+    let connected = false;
+    let streamEnabled = false;
+    let lastPacketTime = 0;
+    let packetRate = 0;
+    let packetHistory = [];   // timestamps for rate calc
+
+    // ── Three.js scene ──────────────────────────────────────────────
+    let scene, camera, renderer, bat, handle, blade;
+    let ground, stumps;
+    let threeReady = false;
+    let X_AXIS, targetQuat, debugQuat;
+    let cameraAngle = { x: 0.3, y: 0 };
+
+    const canvas = document.getElementById('render-canvas');
+    const canvasWrap = document.getElementById('canvas-wrap');
+    const canvasOverlay = document.getElementById('canvas-overlay');
+    const advancedTools = document.getElementById('advanced-tools');
+    let threeLoadStarted = false;
+
+    function initThree() {
+      const THREE = window.THREE;
+      if (!THREE) throw new Error('Three.js is unavailable');
+      const rect = canvas.getBoundingClientRect();
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x161b22);
+
+      camera = new THREE.PerspectiveCamera(45, rect.width / rect.height, 0.1, 100);
+      camera.position.set(0, 2.2, 4.5);
+      camera.lookAt(0, 0.8, 0);
+
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setSize(rect.width, rect.height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      // Lights
+      const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+      scene.add(ambient);
+      const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+      dir.position.set(3, 5, 4);
+      scene.add(dir);
+
+      // Ground plane
+      const grid = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+      grid.position.y = 0;
+      scene.add(grid);
+      const plane = new THREE.PlaneGeometry(20, 20);
+      const planeMat = new THREE.MeshBasicMaterial({ color: 0x10151b });
+      ground = new THREE.Mesh(plane, planeMat);
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      // Stumps (3 x cylinder)
+      const stumpGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.9, 16);
+      const stumpMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+      stumps = new THREE.Group();
+      for (let i = 0; i < 3; i++) {
+        const s = new THREE.Mesh(stumpGeo, stumpMat);
+        s.position.set((i - 1) * 0.22, 0.45, 1.2);
+        stumps.add(s);
+      }
+      scene.add(stumps);
+
+      // Procedural bat: handle (cylinder) + blade (box)
+      bat = new THREE.Group();
+      handle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.04, 0.9, 16),
+        new THREE.MeshStandardMaterial({ color: 0x654321 })
+      );
+      handle.rotation.x = Math.PI / 2;
+      handle.position.y = 0.45;
+      bat.add(handle);
+
+      blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.78, 0.07),
+        new THREE.MeshStandardMaterial({ color: 0xD2B48C })
+      );
+      blade.position.y = 0.28;
+      blade.position.z = 0.12;
+      bat.add(blade);
+
+      // Blade face markings for orientation reference
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.14, 0.72),
+        new THREE.MeshStandardMaterial({ color: 0xE8DCC4, side: THREE.DoubleSide })
+      );
+      face.position.z = 0.041;
+      blade.add(face);
+
+      scene.add(bat);
+
+      X_AXIS = new THREE.Quaternion();
+      targetQuat = new THREE.Quaternion();
+      debugQuat = new THREE.Quaternion();
+      window.addEventListener('resize', onResize);
+      canvas.addEventListener('mousemove', onPointerMove);
+      canvas.addEventListener('mousedown', onPointerDown);
+      canvas.addEventListener('mouseup', onPointerUp);
+
+      threeReady = true;
+      animate();
+    }
+
+    function initThreeSafely() {
+      try {
+        initThree();
+        canvasWrap.classList.remove('preview-unavailable');
+        canvasOverlay.textContent = 'Optional 3D orientation preview · drag to rotate camera';
+      } catch (error) {
+        threeReady = false;
+        canvasWrap.classList.add('preview-unavailable');
+        canvasOverlay.textContent = '3D preview unavailable · PowerplAi Tracker works without it';
+      }
+    }
+
+    function loadThreePreview() {
+      if (threeLoadStarted || !advancedTools.open) return;
+      threeLoadStarted = true;
+      if (window.THREE) {
+        initThreeSafely();
+        return;
+      }
+      canvasOverlay.textContent = 'Loading optional 3D preview…';
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+      script.onload = initThreeSafely;
+      script.onerror = () => {
+        canvasWrap.classList.add('preview-unavailable');
+        canvasOverlay.textContent = '3D preview unavailable · PowerplAi Tracker works without it';
+      };
+      document.head.appendChild(script);
+    }
+
+    advancedTools.addEventListener('toggle', loadThreePreview);
+
+    // ── Coordinate conversion: board is Z-up; Three.js is Y-up.
+    //    Apply rotation of params.coordOffsetDeg around the X axis.
+    function applyCoordConversion(quat) {
+      if (!threeReady) return null;
+      const THREE = window.THREE;
+      const degRad = params.coordOffsetDeg * Math.PI / 180;
+      X_AXIS.setFromAxisAngle(new THREE.Vector3(1, 0, 0), degRad);
+      const out = new THREE.Quaternion();
+      out.multiplyQuaternions(X_AXIS, quat);
+      return out;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Three.js animation / bat orientation. */
+
+    function updateBat(q) {
+      if (!threeReady) return;
+      // q: {w,x,y,z} from BLE (sensor frame, Z-up)
+      debugQuat.set(q.w, q.x, q.y, q.z);
+      const conv = applyCoordConversion(debugQuat);
+      targetQuat.copy(conv);
+    }
+
+    function onResize() {
+      if (!threeReady) return;
+      const rect = canvas.getBoundingClientRect();
+      camera.aspect = rect.width / rect.height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(rect.width, rect.height);
+    }
+
+    let previousFrameTime = 0;
+    function animate(frameTime = performance.now()) {
+      if (!threeReady) return;
+      requestAnimationFrame(animate);
+      const dt = previousFrameTime
+        ? Math.min((frameTime - previousFrameTime) / 1000, 0.05)
+        : 1 / 60;
+      previousFrameTime = frameTime;
+      if (bat) bat.quaternion.slerp(targetQuat, 1 - Math.exp(-12 * dt));
+      renderer.render(scene, camera);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Pointer drag to rotate camera. */
+
+    let isDragging = false;
+    let lastPointer = { x: 0, y: 0 };
+
+    function onPointerMove(e) {
+      if (!threeReady || !isDragging) return;
+      const dx = e.clientX - lastPointer.x;
+      const dy = e.clientY - lastPointer.y;
+      cameraAngle.y += dx * 0.005;
+      cameraAngle.x = Math.max(-1.2, Math.min(1.2, cameraAngle.x + dy * 0.005));
+      lastPointer = { x: e.clientX, y: e.clientY };
+    }
+
+    function onPointerDown(e) { isDragging = true; lastPointer = { x: e.clientX, y: e.clientY }; }
+    function onPointerUp() { isDragging = false; }
+
+    /* ------------------------------------------------------------------ */
+    /* BLE connection. */
+
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const statusEl = document.getElementById('status');
+    const btnGuard = document.getElementById('btn-guard');
+    const btnRecenter = document.getElementById('btn-recenter');
+    const btnReset = document.getElementById('btn-reset');
+    const btnClear = document.getElementById('btn-clear');
+    const btnAirMouse = document.getElementById('btn-air-mouse');
+    const btnTakeStance = document.getElementById('btn-take-stance');
+    const stanceDialog = document.getElementById('stance-dialog');
+    const stanceInstruction = document.getElementById('stance-instruction');
+    const stanceProgress = document.getElementById('stance-progress');
+    const stanceCancel = document.getElementById('stance-cancel');
+    const trackCanvas = document.getElementById('track-canvas');
+    const trackCtx = trackCanvas.getContext('2d');
+    const trackHint = document.getElementById('track-hint');
+    const fieldCallout = document.getElementById('field-callout');
+    const fieldCalloutTitle = document.getElementById('field-callout-title');
+    const fieldCalloutDetail = document.getElementById('field-callout-detail');
+    const battingHandSelect = document.getElementById('batting-hand');
+    const mouseStatus = document.getElementById('mouse-status');
+    const mouseMessage = document.getElementById('mouse-message');
+    const captureReadout = document.getElementById('capture-readout');
+    const captureInstruction = document.getElementById('capture-instruction');
+    const stanceReferenceLabel = document.getElementById('stance-reference');
+    let mouseActive = false;
+    let mouseStarting = false;
+    let mouseTracker = null;
+    let latestQuaternion = null;
+    let shotTracker = null;
+    let shotGuardReference = null;
+    let shotCycle = null;
+    let deviceShotControl = null;
+    let trackWidth = 0;
+    let trackHeight = 0;
+    let battingHand = battingHandSelect.value || 'right';
+    const commandWriter = BleCommandQueue.create({
+      getCharacteristic: () => cmdChar,
+      getReadCharacteristic: () => stateChar,
+      isConnected: () => connected,
+      onError: error => {
+        console.warn('command write failed:', error);
+        setStatus(`Command failed: ${error.message}`, 'err');
+      },
+    });
+    let reconnectTimer = null;
+    let reconnectAttempt = 0;
+    let autoReconnectEnabled = false;
+    let intentionalDisconnect = false;
+    let streamRecovery = null;
+    const packetGate = QuaternionPacketGate.create();
+
+    streamRecovery = StreamRecovery.create({
+      isConnected: () => connected,
+      getLastPacketTime: () => lastPacketTime,
+      sendStartCommand: async () => sendCommand(0x05),
+      getSequence: () => packetGate.sequence,
+      waitForPacket: (count, timeout, before) => packetGate.waitFor(count, timeout, before),
+      onStatus: (msg, kind) => {
+        setStatus(msg, kind);
+      },
+    });
+
+    const shotCard = document.getElementById('shot-card');
+    const shotName = document.getElementById('shot-name');
+    const shotMeta = document.getElementById('shot-meta');
+    const gameOutcomeCard = document.getElementById('game-outcome-card');
+    const gameOutcomeSummary = document.getElementById('game-outcome-summary');
+    const gameOutcomeJson = document.getElementById('game-outcome-json');
+    const gameConfigSummary = document.getElementById('game-config-summary');
+    const gameConfigStatus = document.getElementById('game-config-status');
+    const gameConfigControls = {
+      difficulty: document.getElementById('game-difficulty'),
+      bowled_prob: document.getElementById('game-bowled-prob'),
+      edge_base_prob: document.getElementById('game-edge-prob'),
+      capture_window_ms: document.getElementById('game-capture-window-ms'),
+    };
+    const GAME_CONFIG_STORAGE_KEY = 'powerplai.game_config';
+
+    function loadGameConfig() {
+      try {
+        const stored = JSON.parse(window.localStorage.getItem(GAME_CONFIG_STORAGE_KEY) || 'null');
+        return GameLayer.normalizeConfig(stored && typeof stored === 'object' ? stored : {});
+      } catch (_) {
+        return GameLayer.normalizeConfig();
+      }
+    }
+
+    let gameConfig = loadGameConfig();
+    const sessionSetup = BleSessionSetup.create({
+      commandWriter,
+      isConnected: () => connected,
+      getConfig: () => gameConfig,
+      encodeConfig: DeviceConfig.encode,
+      decodeState: DeviceConfig.decode,
+      configMatches: DeviceConfig.matches,
+      createStabilityTracker: StanceCalibration.createStabilityTracker,
+    });
+
+    async function syncGameConfig() {
+      if (!connected) {
+        setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; its sensor stream remains at 50 Hz.', 'pending');
+        return false;
+      }
+      setGameConfigStatus(`Sending ${gameConfig.capture_window_ms} ms capture setting to the ESP32…`, 'pending');
+      shotGuardReference = null;
+      updateStanceReference();
+      updateAirMouseUI();
+      updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+      try {
+        const result = await sessionSetup.syncConfig(gameConfig);
+        if (!result) return false;
+        shotGuardReference = result.stanceReference;
+        updateStanceReference();
+        updateAirMouseUI();
+        updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+        const acknowledged = result.state;
+        const acknowledgedDifficulty = acknowledged.difficulty.replace('_', ' ')
+          .replace(/\b\w/g, letter => letter.toUpperCase());
+        const expectedSamples = Math.round(acknowledged.capture_window_ms * 50 / 1000);
+        setGameConfigStatus(`ESP32 ACK ✓ · ${acknowledgedDifficulty} · bowled ${acknowledged.bowled_prob}/100 · edge ${acknowledged.edge_base_prob}/100 · ${acknowledged.capture_window_ms} ms. Browser uses this window; BLE stays at 50 Hz (~${expectedSamples} samples).`, 'acknowledged');
+        setMouseMessage(shotGuardReference
+          ? 'Game settings confirmed. Your session stance is still active.'
+          : 'Game settings confirmed. Take your stance for 3 seconds before starting.', 'success');
+        return true;
+      } catch (error) {
+        setGameConfigStatus(`ESP32 did not acknowledge the selected settings: ${error.message || 'BLE readback failed.'}`, 'error');
+        setMouseMessage(error.message || 'Could not confirm game settings with the ESP32.', 'error');
+        setStatus(`Game settings not confirmed: ${error.message}`, 'err');
+        updateAirMouseUI();
+        updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+        return false;
+      }
+    }
+
+    function renderGameConfig() {
+      for (const [key, control] of Object.entries(gameConfigControls)) control.value = String(gameConfig[key]);
+      const difficultyName = gameConfig.difficulty.replace('_', ' ')
+        .replace(/\b\w/g, letter => letter.toUpperCase());
+      gameConfigSummary.textContent = `Game config · ${difficultyName} · ${gameConfig.capture_window_ms} ms`;
+    }
+
+    function setGameConfigStatus(message, state) {
+      gameConfigStatus.textContent = message;
+      gameConfigStatus.dataset.state = state;
+    }
+
+    function updateStanceReference() {
+      if (shotGuardReference) {
+        stanceReferenceLabel.textContent = 'Saved stance direction: Straight · 0° session baseline. Shot directions are relative to this pose; this is not a compass heading.';
+        stanceReferenceLabel.dataset.state = 'set';
+      } else if (connected && sessionSetup.configReady) {
+        stanceReferenceLabel.textContent = 'Stance not set. Take stance to establish Straight · 0° as this session’s reference; shot directions will be relative to it.';
+        stanceReferenceLabel.dataset.state = 'unset';
+      } else {
+        stanceReferenceLabel.textContent = 'Stance reference not set. Connect and take stance; the saved pose becomes Straight · 0° for this session.';
+        stanceReferenceLabel.dataset.state = 'unset';
+      }
+    }
+    renderGameConfig();
+    updateStanceReference();
+
+    function updateGameConfig() {
+      gameConfig = GameLayer.normalizeConfig({
+        difficulty: gameConfigControls.difficulty.value,
+        bowled_prob: Number(gameConfigControls.bowled_prob.value),
+        edge_base_prob: Number(gameConfigControls.edge_base_prob.value),
+        capture_window_ms: Number(gameConfigControls.capture_window_ms.value),
+      });
+      renderGameConfig();
+      try { window.localStorage.setItem(GAME_CONFIG_STORAGE_KEY, JSON.stringify(gameConfig)); } catch (_) { /* storage may be disabled */ }
+      if (shotCycle) shotCycle.setCaptureMs(gameConfig.capture_window_ms);
+      if (!connected) setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; its sensor stream remains at 50 Hz.', 'pending');
+      void syncGameConfig();
+    }
+    for (const control of Object.values(gameConfigControls)) control.addEventListener('change', updateGameConfig);
+
+    const dbgQ = document.getElementById('dbg-q');
+    const dbgRate = document.getElementById('dbg-rate');
+    const dbgSwing = document.getElementById('dbg-swing');
+    const historyList = document.getElementById('history-list');
+    const historyTitle = document.getElementById('history-title');
+    const historyToggle = document.getElementById('history-toggle');
+    const historyDownload = document.getElementById('history-download');
+    const historyClear = document.getElementById('history-clear');
+    const shotHistory = ShotHistory.create(historyList);
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = kind || '';
+    }
+
+    function updateAirMouseUI() {
+      updateStanceReference();
+      const shotBusy = shotCycle && !['ready', 'error'].includes(shotCycle.state);
+      const ready = sessionSetup.isReady();
+      btnAirMouse.disabled = !ready || mouseStarting || shotBusy;
+      btnAirMouse.textContent = shotBusy ? 'Shot in progress…' : mouseStarting ? 'Starting…' : 'START SHOT';
+      btnAirMouse.classList.toggle('active', false);
+      btnAirMouse.setAttribute('aria-pressed', 'false');
+      trackHint.textContent = shotBusy ? 'Shot capture · ' + shotCycle.state
+        : mouseActive ? 'LIVE · Move the bat'
+          : mouseStarting ? 'Waiting for the bat…' : connected ? 'Ready when you are' : 'Ready when connected';
+      btnDisconnect.disabled = !connected;
+      btnTakeStance.disabled = !connected || !sessionSetup.configReady || mouseStarting || shotBusy || sessionSetup.isCalibrating;
+      btnTakeStance.textContent = shotGuardReference ? 'Re-take Stance · 3 s' : 'Take Stance · 3 s';
+      const guardControlsLocked = !connected || mouseStarting || shotBusy || Boolean(shotGuardReference);
+      btnGuard.disabled = guardControlsLocked;
+      btnRecenter.disabled = guardControlsLocked;
+      btnReset.disabled = guardControlsLocked;
+      btnClear.disabled = guardControlsLocked;
+    }
+
+    function updateShotPracticeUI(state, detail = {}) {
+      const busy = ['preparing', 'countdown', 'capturing', 'analyzing'].includes(state);
+      for (const control of Object.values(gameConfigControls)) control.disabled = busy;
+      captureReadout.dataset.state = state;
+      if (state === 'preparing') {
+        captureReadout.textContent = 'Preparing…';
+        captureInstruction.textContent = 'Checking the live sensor stream.';
+      } else if (state === 'countdown') {
+        captureReadout.textContent = String(detail.remaining || 1);
+        captureInstruction.textContent = shotGuardReference
+          ? 'Hold your session stance · 3–2–1'
+          : 'Take and verify your session stance before starting a shot.';
+      } else if (state === 'capturing') {
+        captureReadout.textContent = 'GO';
+        const captureMs = detail.captureMs || gameConfig.capture_window_ms;
+        captureInstruction.textContent = `Swing now · browser captures for ${captureMs} ms · about ${Math.round(captureMs / 20)} samples from the 50 Hz BLE stream`;
+      } else if (state === 'analyzing') {
+        captureReadout.textContent = 'Analyzing…';
+        const captureMs = detail.captureMs || gameConfig.capture_window_ms;
+        const expectedSamples = Math.round(captureMs * 50 / 1000);
+        captureInstruction.textContent = `${detail.sampleCount || 0} samples received · ${detail.sampleSpanMs ?? 0} ms observed timestamp span inside ${captureMs} ms · ~${expectedSamples} expected at 50 Hz`;
+      } else if (state === 'error') {
+        captureReadout.textContent = 'Needs attention';
+        captureInstruction.textContent = detail.message || 'Capture failed. Check the BLE connection and try again.';
+      } else {
+        captureReadout.textContent = 'Ready';
+        if (!connected) captureInstruction.textContent = 'Connect the bat to begin.';
+        else if (state === 'ready' && shotCycle && shotCycle.lastResult) {
+          captureInstruction.textContent = `Last shot: ${shotCycle.lastSampleCount} samples · ${shotCycle.lastSampleSpanMs} ms observed span / ${shotCycle.lastCaptureMs} ms configured. Return to stance, then press START.`;
+        } else captureInstruction.textContent = `Press START on the bat. Hold your stance through 3–2–1; swing when GO appears (${gameConfig.capture_window_ms} ms).`;
+      }
+      trackHint.textContent = state === 'capturing' ? 'LIVE · Swing now'
+        : busy ? 'Shot capture · ' + state
+          : connected ? 'Ready when you are' : 'Ready when connected';
+      btnAirMouse.disabled = !sessionSetup.isReady() || busy || mouseStarting;
+      btnAirMouse.textContent = busy ? 'Shot in progress…' : mouseStarting ? 'Starting…' : 'START SHOT';
+      btnAirMouse.classList.toggle('active', false);
+      btnAirMouse.setAttribute('aria-pressed', 'false');
+      const guardControlsLocked = !connected || !sessionSetup.configReady || mouseStarting || busy || Boolean(shotGuardReference);
+      btnGuard.disabled = guardControlsLocked;
+      btnRecenter.disabled = guardControlsLocked;
+      btnReset.disabled = guardControlsLocked;
+      btnClear.disabled = guardControlsLocked;
+      btnTakeStance.disabled = !connected || !sessionSetup.configReady || mouseStarting || busy || sessionSetup.isCalibrating;
+      btnTakeStance.textContent = shotGuardReference ? 'Re-take Stance · 3 s' : 'Take Stance · 3 s';
+    }
+
+    function setMouseMessage(message, kind = 'info') {
+      mouseMessage.textContent = message;
+      mouseMessage.dataset.kind = kind;
+    }
+
+    function drawTrack() {
+      const bounds = trackCanvas.getBoundingClientRect();
+      const width = Math.max(180, Math.round(bounds.width || 320));
+      const height = Math.max(180, Math.round(bounds.height || 300));
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      if (trackWidth !== width || trackHeight !== height || trackCanvas.width !== Math.round(width * pixelRatio)) {
+        trackWidth = width;
+        trackHeight = height;
+        trackCanvas.width = Math.round(width * pixelRatio);
+        trackCanvas.height = Math.round(height * pixelRatio);
+      }
+
+      const ctx = trackCtx;
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      const activeTracker = mouseActive ? mouseTracker : shotTracker;
+      const previousResult = shotCycle && shotCycle.lastResult;
+      const displayingResult = previousResult && ['analyzing', 'ready'].includes(shotCycle.state);
+      const resultGeometry = displayingResult
+        ? WagonWheel.shotGeometry(previousResult, previousResult.battingHand || battingHand)
+        : null;
+      const points = displayingResult ? resultGeometry.points
+        : activeTracker ? activeTracker.points : [];
+      const currentDirection = activeTracker && points.length > 1 ? activeTracker.result().label : null;
+      const sector = resultGeometry ? resultGeometry.sector : WagonWheel.sectorForDirection(currentDirection, battingHand);
+      if (displayingResult) {
+        fieldCallout.dataset.mode = 'result';
+        fieldCalloutTitle.textContent = resultGeometry.shotType
+          ? `Likely stroke · ${resultGeometry.shotType}` : 'Shot estimate unavailable';
+        fieldCalloutDetail.textContent = resultGeometry.direction === 'No clear movement'
+          ? 'Direction unclear · try a larger, cleaner swing'
+          : `${resultGeometry.fieldZone} · ${resultGeometry.direction} · ${resultGeometry.mappedSector} · ${previousResult.directionConsistency || 'Unclear'} consistency${resultGeometry.directionMismatch ? ' · vector corrected label' : ''}`;
+      } else if ((mouseActive || shotCycle?.state === 'capturing') && currentDirection) {
+        fieldCallout.dataset.mode = 'live';
+          fieldCalloutTitle.textContent = mouseActive ? 'PowerplAi Tracker' : 'Shot direction';
+        fieldCalloutDetail.textContent = `${currentDirection} · ${mouseActive ? 'live pointer' : 'tracking swing'}`;
+      } else {
+        fieldCallout.dataset.mode = 'ready';
+        fieldCalloutTitle.textContent = 'Shot map';
+        fieldCalloutDetail.textContent = shotCycle?.state === 'countdown'
+          ? 'Hold session stance · 3–2–1'
+        : 'Press START on the bat to capture a shot';
+      }
+      trackCanvas.setAttribute('aria-label', displayingResult
+        ? ShotReport.ariaLabel(previousResult, resultGeometry)
+        : 'Cricket wagon-wheel ground. The bat movement trail starts at the pitch and points toward the estimated shot sector.');
+      WagonWheel.draw(ctx, {
+        width,
+        height,
+        points,
+        heading: displayingResult ? resultGeometry.heading : activeTracker && activeTracker.heading,
+        showArrow: !(displayingResult && !sector),
+        sector,
+        snapToSector: Boolean(displayingResult && resultGeometry.snapToSector),
+        battingHand: displayingResult ? resultGeometry.battingHand : battingHand,
+      });
+    }
+
+    function stopAirMouseForDisconnect() {
+      mouseActive = false;
+      mouseStarting = false;
+      mouseTracker = null;
+      shotGuardReference = null;
+      sessionSetup.resetSession();
+      packetGate.cancelWaiters();
+      if (shotCycle) shotCycle.cancel();
+      updateAirMouseUI();
+      setMouseMessage('Disconnected. Reconnect to continue tracking.', 'error');
+      drawTrack();
+    }
+
+    async function startAirMouse() {
+      if (!sessionSetup.isReady() || mouseStarting || mouseActive || (shotCycle && !['ready', 'error'].includes(shotCycle.state))) return;
+      mouseStarting = true;
+      setMouseMessage('Starting the live stream and setting your current pose as center…');
+      updateAirMouseUI();
+      try {
+        const streamIsStale = !lastPacketTime || performance.now() - lastPacketTime > 1500;
+        if (!streamEnabled || streamIsStale) {
+          if (!await sendCommand(0x05)) throw new Error('Could not start the BLE stream.');
+          streamEnabled = true;
+          packetHistory = [];
+          packetRate = 0;
+          updateStreamButton();
+        }
+
+        const beforeReference = packetGate.sequence;
+        if (!await packetGate.waitFor(1, 2500, beforeReference)) {
+          throw new Error('No sensor data arrived. Check the ESP32 stream and try again.');
+        }
+
+        mouseTracker = DirectionTracker.create({ referenceQuaternion: { w: 1, x: 0, y: 0, z: 0 } });
+        mouseTracker.add(latestQuaternion, lastPacketTime);
+        mouseActive = true;
+        mouseStatus.textContent = 'Pointer at center';
+        setMouseMessage('Live tracking. Move the bat to see its direction; stopping keeps BLE connected.');
+        updateAirMouseUI();
+        drawTrack();
+      } catch (error) {
+        mouseActive = false;
+        mouseTracker = null;
+        setMouseMessage(error.message || 'PowerplAi Tracker could not start.', 'error');
+        updateAirMouseUI();
+        drawTrack();
+      } finally {
+        mouseStarting = false;
+        updateAirMouseUI();
+      }
+    }
+
+    function stopAirMouse() {
+      if (!mouseActive) return;
+      mouseActive = false;
+      setMouseMessage('Tracker stopped. BLE and the session stance stay active; disconnect to reset the stance.');
+      updateAirMouseUI();
+      drawTrack();
+    }
+
+    async function prepareShotCapture() {
+      if (!sessionSetup.isReady() || mouseStarting) return false;
+      if (mouseActive) stopAirMouse();
+      const stale = !lastPacketTime || performance.now() - lastPacketTime > 1500;
+      if (!streamEnabled || stale) {
+        const beforeStart = packetGate.sequence;
+        if (!await sendCommand(0x05)) return false;
+        streamEnabled = true;
+        packetHistory = [];
+        packetRate = 0;
+        updateStreamButton();
+        if (!await packetGate.waitFor(1, 2500, beforeStart)) return false;
+      }
+      shotTracker = null;
+      mouseStatus.textContent = 'Set your stance';
+      drawTrack();
+      return connected;
+    }
+
+    async function takeStance() {
+      if (!connected || !sessionSetup.configReady || sessionSetup.isCalibrating) return;
+      stanceInstruction.textContent = 'Stand in your batting stance with the display facing you. Hold the bat still for 3 seconds.';
+      stanceProgress.textContent = 'Clearing the previous stance…';
+      stanceCancel.textContent = 'Cancel';
+      stanceDialog.showModal();
+      updateAirMouseUI();
+      try {
+        const reference = await sessionSetup.calibrateStance(progress => {
+          if (progress.moved) {
+            stanceInstruction.textContent = progress.valid
+              ? 'Movement detected. Hold still; the three-second stability timer has restarted.'
+              : 'Sensor samples paused. Hold still while the live stream recovers.';
+          } else {
+            stanceInstruction.textContent = 'Stand in your batting stance with the display facing you. Keep the bat still.';
+          }
+          stanceProgress.textContent = progress.stable ? 'Guard set · verifying with ESP32…'
+            : `Hold still · ${(progress.remainingMs / 1000).toFixed(1)} s`;
+        });
+        if (!reference) return;
+        shotGuardReference = reference;
+        stanceInstruction.textContent = 'Saved stance direction: Straight · 0° session-relative baseline. Shot directions are measured from this pose; this is not a compass heading. Return to this stance between shots.';
+        stanceProgress.textContent = 'Guard set ✓ · Straight · 0°';
+        stanceCancel.textContent = 'Done';
+        setMouseMessage('Stance set and verified by the ESP32. Web and bat START are ready.', 'success');
+      } catch (error) {
+        stanceInstruction.textContent = error.message || 'Stance setup failed. Check the BLE connection and try again.';
+        stanceProgress.textContent = 'Needs attention';
+        stanceCancel.textContent = 'Close';
+        setMouseMessage(error.message || 'Stance setup failed.', 'error');
+      } finally {
+        updateAirMouseUI();
+        updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+      }
+    }
+
+    async function cancelStanceDialog() {
+      const wasCalibrating = sessionSetup.isCalibrating;
+      if (wasCalibrating) await sessionSetup.cancelStance(true);
+      if (wasCalibrating) {
+        shotGuardReference = null;
+        setMouseMessage('Stance setup cancelled. Take stance again before starting.', 'info');
+      }
+      if (stanceDialog.open) stanceDialog.close();
+      updateAirMouseUI();
+    }
+
+    btnTakeStance.addEventListener('click', () => { void takeStance(); });
+    stanceCancel.addEventListener('click', () => {
+      if (sessionSetup.isCalibrating) void cancelStanceDialog();
+      else if (stanceDialog.open) stanceDialog.close();
+    });
+    stanceDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      void cancelStanceDialog();
+    });
+
+    function renderShotState(state, detail) {
+      updateShotPracticeUI(state, detail);
+      if (deviceShotControl && (state === 'ready' || state === 'error')) {
+        // Unlock the LCD only when a shot cycle reaches a terminal state.
+        // Connection/status redraws must not reset an in-progress device request.
+        void deviceShotControl.markReady();
+      }
+      if (state === 'capturing') {
+        shotTracker = DirectionTracker.create({
+          gain: 1.8,
+          deadzone: 0.0025,
+          referenceQuaternion: shotGuardReference,
+        });
+        mouseStatus.textContent = 'Tracking swing…';
+      }
+      if (state === 'ready' && shotCycle && shotCycle.lastResult) {
+        const result = shotCycle.lastResult;
+        const geometry = WagonWheel.shotGeometry(result, result.battingHand || battingHand);
+        const direction = geometry.direction;
+        const sector = geometry.fieldSector;
+        mouseStatus.textContent = direction === 'No clear movement' ? direction : `Shot direction: ${direction} · ${sector}`;
+        setMouseMessage('Capture complete. Return the bat to the saved session stance before the next shot.', 'success');
+      }
+      if (state === 'error') setMouseMessage('Start failed. See the message above, then press START to retry.', 'error');
+      drawTrack();
+    }
+
+    shotCycle = ShotPractice.create({
+      captureMs: gameConfig.capture_window_ms,
+      getContext: () => ({ ...gameConfig }),
+      onPrepare: prepareShotCapture,
+      analyze: samples => ShotClassifier.analyzeShot(samples, {
+        ...params,
+        referenceQuaternion: shotGuardReference,
+        battingHand: activeShotBattingHand,
+      }),
+      onResult: (result, samples, captureDetail) => {
+        shotCycle.lastResult = result;
+        const geometry = WagonWheel.shotGeometry(result, result.battingHand || battingHand);
+        const shotConfig = captureDetail?.context || gameConfig;
+        const gameOutcome = GameLayer.createOutcome(result, geometry, shotConfig, shotHistory.count + 1);
+        showShot(result, samples, geometry, gameOutcome, captureDetail);
+        const peakRadS = Number.isFinite(result.peakAngularVelocityRadS)
+          ? `${result.peakAngularVelocityRadS.toFixed(1)} rad/s` : 'speed unavailable';
+        dbgSwing.textContent = `${new Date().toLocaleTimeString()} · classifier ${result.shotType || 'unclear'} · ${peakRadS}`;
+      },
+      onState: renderShotState,
+    });
+    shotCycle.lastResult = null;
+    deviceShotControl = DeviceShotControl.create({
+      isConnected: () => connected,
+      isReady: () => sessionSetup.isReady(),
+      getState: () => shotCycle.state,
+      sendCommand,
+      startCycle: async () => {
+        if (!sessionSetup.isReady()) return false;
+        shotCycle.lastResult = null;
+        activeShotBattingHand = battingHand;
+        shotTracker = null;
+        shotCard.style.display = 'none';
+        mouseStatus.textContent = 'Preparing next shot…';
+        drawTrack();
+        return shotCycle.start();
+      },
+    });
+
+    function updateConnectedStatus() {
+      if (!connected) return;
+      if (lastPacketTime && performance.now() - lastPacketTime > 1500) {
+        setStatus('Connected · no quaternion notifications', 'err');
+      } else {
+        setStatus(`Connected: ${device.name || 'CricketBat'} · BLE live · ${packetRate} Hz`, 'ok');
+      }
+    }
+
+    async function activateDevice(d) {
+      server = await d.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+      cmdChar = await service.getCharacteristic(CMD_UUID);
+      stateChar = await service.getCharacteristic(STATE_UUID);
+      sessionSetup.resetSession();
+      shotGuardReference = null;
+      notifyChar.addEventListener('characteristicvaluechanged', onNotify);
+      await notifyChar.startNotifications();
+
+      connected = true;
+      setStatus('Connected · starting sensor stream and confirming game settings…', '');
+      if (!await sendCommand(0x05)) throw new Error('Could not start the BLE sensor stream.');
+      streamEnabled = true;
+      streamRecoveryPending = false;
+      lastPacketTime = 0;
+      packetHistory = [];
+      packetRate = 0;
+      reconnectAttempt = 0;
+      btnConnect.textContent = 'Connected';
+      btnConnect.disabled = true;
+      btnDisconnect.disabled = false;
+      btnConnect.classList.remove('reconnect');
+      updateAirMouseUI();
+      updateShotPracticeUI('ready');
+      updateConnectedStatus();
+      if (!await syncGameConfig()) throw new Error('Game settings could not be confirmed by the ESP32.');
+      setStatus(`Connected: ${device.name || 'CricketBat'} · settings confirmed · take stance`, 'ok');
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer || intentionalDisconnect || !autoReconnectEnabled || !device) return;
+      const delay = Math.min(10000, 500 * (2 ** Math.min(reconnectAttempt, 5)));
+      reconnectAttempt++;
+      setStatus(`BLE lost · reconnecting in ${Math.ceil(delay / 1000)}s`, 'err');
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        if (intentionalDisconnect || !device || device.gatt.connected) return;
+        try {
+          setStatus('Reconnecting to bat…', '');
+          await activateDevice(device);
+          setStatus(`Reconnected: ${device.name || 'CricketBat'} · BLE live`, 'ok');
+        } catch (error) {
+          connected = false;
+          streamEnabled = false;
+          notifyChar = null;
+          cmdChar = null;
+          stateChar = null;
+          sessionSetup.resetSession();
+          shotGuardReference = null;
+          if (device.gatt.connected) device.gatt.disconnect();
+          else scheduleReconnect();
+        }
+      }, delay);
+    }
+
+    btnConnect.addEventListener('click', async () => {
+      if (!('bluetooth' in navigator)) {
+        setStatus('Web Bluetooth not supported in this browser.', 'err');
+        return;
+      }
+      try {
+        intentionalDisconnect = false;
+        autoReconnectEnabled = false;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        setStatus('Scanning…');
+        btnConnect.disabled = true;
+        btnConnect.textContent = 'Searching…';
+
+        const d = await navigator.bluetooth.requestDevice({
+          // Prefer an advertised service match, but also accept this app's
+          // exact device-name prefix. Some OS Bluetooth stacks don't expose
+          // the 128-bit service UUID consistently during their initial scan.
+          filters: [
+            { services: [SERVICE_UUID] },
+            { namePrefix: 'CricketBat' },
+          ],
+          optionalServices: [SERVICE_UUID],
+        });
+        device = d;
+        // Enable recovery as soon as the user has selected the device. This
+        // covers disconnects during service discovery/notification setup too.
+        autoReconnectEnabled = true;
+
+        d.addEventListener('gattserverdisconnected', onDisconnect);
+
+        setStatus('Connecting…');
+        await activateDevice(d);
+
+      } catch (err) {
+        connected = false;
+        streamEnabled = false;
+        notifyChar = null;
+        cmdChar = null;
+        stateChar = null;
+        sessionSetup.resetSession();
+        shotGuardReference = null;
+        if (device && autoReconnectEnabled && !intentionalDisconnect) {
+          setStatus(`Connection interrupted · retrying (${err.message})`, 'err');
+          if (device.gatt && device.gatt.connected) device.gatt.disconnect();
+          else scheduleReconnect();
+        } else {
+          autoReconnectEnabled = false;
+          intentionalDisconnect = true;
+          setStatus(`Error: ${err.message}`, 'err');
+        }
+        btnConnect.disabled = false;
+        btnConnect.textContent = device ? 'Reconnect' : 'Connect to Bat';
+        btnDisconnect.disabled = true;
+        btnGuard.disabled = true;
+        btnRecenter.disabled = true;
+        btnReset.disabled = true;
+        btnClear.disabled = true;
+        updateAirMouseUI();
+        updateShotPracticeUI('ready');
+        setMouseMessage(device
+          ? 'Connection interrupted. Keeping the selected bat and retrying automatically.'
+          : 'Could not connect. Keep the bat nearby and try again.', 'error');
+      }
+    });
+
+    btnDisconnect.addEventListener('click', () => {
+      intentionalDisconnect = true;
+      autoReconnectEnabled = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (device && device.gatt && device.gatt.connected) {
+        setStatus('Disconnecting…', '');
+        device.gatt.disconnect();
+      } else {
+        onDisconnect();
+      }
+    });
+
+    function onDisconnect(event) {
+      if (event && event.target && event.target !== device) return;
+      // Drop the connection references before cancelling workflows. A cancel
+      // can publish a ready state, which must not write to a dying GATT link.
+      connected = false;
+      streamEnabled = false;
+      notifyChar = null;
+      cmdChar = null;
+      stateChar = null;
+      server = null;
+      lastPacketTime = 0;
+      streamRecoveryPending = false;
+      packetHistory = [];
+      packetRate = 0;
+      stopAirMouseForDisconnect();
+      setStatus('Disconnected', 'err');
+      btnConnect.textContent = 'Reconnect';
+      btnConnect.classList.add('reconnect');
+      btnConnect.disabled = false;
+      btnDisconnect.disabled = true;
+      btnGuard.disabled = true;
+      btnRecenter.disabled = true;
+      btnReset.disabled = true;
+      btnClear.disabled = true;
+      updateAirMouseUI();
+      updateShotPracticeUI('ready');
+      dbgRate.textContent = '0 Hz';
+      if (!intentionalDisconnect) scheduleReconnect();
+    }
+
+    function sendCommand(cmd) {
+      return commandWriter.send(cmd);
+    }
+
+    btnAirMouse.addEventListener('click', () => { void deviceShotControl.requestStart(); });
+
+    btnGuard.addEventListener('click', () => { sendCommand(0x03); });
+    btnRecenter.addEventListener('click', () => { sendCommand(0x01); });
+    btnReset.addEventListener('click', () => { sendCommand(0x02); });
+    btnClear.addEventListener('click', () => { sendCommand(0x04); });
+
+    /* ------------------------------------------------------------------ */
+    /* Packet receive: 17 bytes = w,x,y,z (LE float32) + flags. */
+
+    function onNotify(e) {
+      if (!streamEnabled) return;
+      const v = e.target.value;
+      const dv = new DataView(v.buffer, v.byteOffset, v.byteLength);
+
+      if (dv.byteLength < 17) {
+        console.warn('payload too short:', dv.byteLength);
+        return;
+      }
+
+      const q = {
+        w: dv.getFloat32(0, true),
+        x: dv.getFloat32(4, true),
+        y: dv.getFloat32(8, true),
+        z: dv.getFloat32(12, true),
+      };
+      const flags = dv.getUint8(16);
+      const deviceStartRequested = (flags & 0x02) !== 0;
+
+      const norm = Math.hypot(q.w, q.x, q.y, q.z);
+      if (!Number.isFinite(norm) || norm < 0.5 || norm > 1.5) {
+        console.warn('invalid quaternion payload:', q);
+        return;
+      }
+      q.w /= norm;
+      q.x /= norm;
+      q.y /= norm;
+      q.z /= norm;
+
+      const now = performance.now();
+      sessionSetup.observeStanceSample(q, now);
+      if (deviceShotControl) {
+        if (deviceStartRequested) void deviceShotControl.requestDeviceStart();
+        else deviceShotControl.releaseDeviceStart();
+      }
+      latestQuaternion = { ...q };
+      packetGate.notify();
+      packetHistory.push(now);
+      while (packetHistory.length && now - packetHistory[0] > 1000) {
+        packetHistory.shift();
+      }
+      packetRate = packetHistory.length;
+      lastPacketTime = now;
+
+      // Update debug panel.
+      dbgQ.textContent = `w: ${q.w.toFixed(4)}  x: ${q.x.toFixed(4)}\ny: ${q.y.toFixed(4)}  z: ${q.z.toFixed(4)}`;
+      dbgRate.textContent = `${packetRate} Hz`;
+      updateConnectedStatus();
+
+      // Apply to 3D bat.
+      updateBat(q);
+
+      const shotSample = { ...q, t: now };
+      if (shotCycle && shotCycle.addSample(shotSample)) {
+        if (shotTracker) {
+          const movement = shotTracker.add(q, now);
+          if (movement?.moved) {
+            mouseStatus.textContent = `Shot moving ${DirectionTracker.directionFor(movement.dx, movement.dy).label.toLowerCase()}`;
+          }
+        }
+        drawTrack();
+        return;
+      }
+
+      if (mouseActive && mouseTracker) {
+        const movement = mouseTracker.add(q, now);
+        if (movement?.moved) {
+          const direction = DirectionTracker.directionFor(movement.dx, movement.dy).label;
+          mouseStatus.textContent = `Moving ${direction.toLowerCase()}`;
+        }
+        drawTrack();
+      }
+    }
+
+    function showShot(r, samples = [], geometry = WagonWheel.shotGeometry(r, r.battingHand || battingHand), gameOutcome = null, captureDetail = null) {
+      shotCard.style.display = 'flex';
+      shotCard.classList.remove('new');
+      void shotCard.offsetWidth;   // reflow
+      shotCard.classList.add('new');
+
+      shotName.textContent = geometry.shotType
+        ? `Likely stroke: ${geometry.shotType}` : (r.shotType || r.name || 'Shot estimate unavailable');
+      shotMeta.replaceChildren();
+      for (const text of ShotReport.fields(r, geometry)) {
+        const item = document.createElement('span');
+        item.textContent = text;
+        shotMeta.append(item);
+      }
+      if (captureDetail) {
+        const item = document.createElement('span');
+        const observedSpan = Math.round(captureDetail.sampleSpanMs * 10) / 10;
+        item.textContent = `Capture: ${captureDetail.captureMs} ms configured · ${captureDetail.sampleCount} samples received · ${observedSpan} ms observed span`;
+        shotMeta.append(item);
+      }
+      if (gameOutcome) {
+        gameOutcomeCard.hidden = false;
+        gameOutcomeSummary.textContent = gameOutcome.out
+          ? `OUT · ${gameOutcome.dismissal}${gameOutcome.edged ? ' · edged' : ''}`
+          : `${gameOutcome.runs} run${gameOutcome.runs === 1 ? '' : 's'}${gameOutcome.edged ? ' · edged' : ''} · ${gameOutcome.timing.toLowerCase()} timing`;
+        gameOutcomeJson.textContent = JSON.stringify(gameOutcome, null, 2);
+      }
+
+      // Keep every completed shot in this page session; newest appears first.
+      const count = shotHistory.append(r, new Date(), samples, geometry, gameOutcome, captureDetail);
+      historyTitle.textContent = `Shot history (${count})`;
+      historyDownload.disabled = count === 0;
+      historyClear.disabled = count === 0;
+      ShotReport.log(r, samples, console, undefined, geometry, gameOutcome);
+    }
+
+    /* History toggle */
+    historyToggle.addEventListener('click', () => {
+      const expanded = historyToggle.getAttribute('aria-expanded') !== 'true';
+      historyToggle.setAttribute('aria-expanded', String(expanded));
+      historyList.hidden = !expanded;
+      historyToggle.textContent = expanded ? 'Show history ▲' : 'Show history ▼';
+    });
+
+    historyDownload.addEventListener('click', () => {
+      if (!shotHistory.count) return;
+      const blob = new Blob([shotHistory.toCSV()], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `powerplai-shot-history-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    historyClear.addEventListener('click', () => {
+      shotHistory.clear();
+      historyTitle.textContent = 'Shot history (0)';
+      historyDownload.disabled = true;
+      historyClear.disabled = true;
+    });
+
+    /* ------------------------------------------------------------------ */
+    /* Tuning sliders. */
+
+    const sl = {
+      threshold: document.getElementById('slider-threshold'),
+      bound1: document.getElementById('slider-bound1'),
+      height: document.getElementById('slider-height'),
+      powerlo: document.getElementById('slider-powerlo'),
+      powerhi: document.getElementById('slider-powerhi'),
+      coord: document.getElementById('slider-coord'),
+    };
+    const lbl = {
+      threshold: document.getElementById('lbl-threshold'),
+      bound1: document.getElementById('lbl-bound1'),
+      height: document.getElementById('lbl-height'),
+      powerlo: document.getElementById('lbl-powerlo'),
+      powerhi: document.getElementById('lbl-powerhi'),
+      coord: document.getElementById('lbl-coord'),
+    };
+    function bindSlider(key, input, label) {
+      input.addEventListener('input', () => {
+        const v = parseFloat(input.value);
+        params[key] = v;
+        label.textContent = (key === 'swingThresholdRad' || key === 'powerLow' || key === 'powerHigh')
+          ? `${v.toFixed(1)} rad/s` : `${v.toFixed(0)}°`;
+      });
+    }
+    bindSlider('swingThresholdRad', sl.threshold, lbl.threshold);
+    bindSlider('planeBound1', sl.bound1, lbl.bound1);
+    bindSlider('heightBound', sl.height, lbl.height);
+    bindSlider('powerLow', sl.powerlo, lbl.powerlo);
+    bindSlider('powerHigh', sl.powerhi, lbl.powerhi);
+    bindSlider('coordOffsetDeg', sl.coord, lbl.coord);
+    battingHandSelect.addEventListener('change', () => {
+      battingHand = battingHandSelect.value === 'left' ? 'left' : 'right';
+      drawTrack();
+    });
+
+    // Keep the rate/status useful when notifications stop arriving.
+    setInterval(() => {
+      const now = performance.now();
+      while (packetHistory.length && now - packetHistory[0] > 1000) packetHistory.shift();
+      packetRate = packetHistory.length;
+      dbgRate.textContent = `${packetRate} Hz`;
+      updateConnectedStatus();
+      // Recover links that remain GATT-connected but have stopped delivering
+      // sensor notifications. Require a previously live stream and a generous
+      // timeout to avoid mistaking startup latency or normal packet jitter.
+      streamRecovery.check(now);
+    }, 250);
+
+    /* ------------------------------------------------------------------ */
+    /* Init. */
+
+    drawTrack();
+    window.addEventListener('resize', drawTrack);
+    setStatus('Ready — click "Connect to Bat"', '');
+  </script>
+</body>
+</html>
