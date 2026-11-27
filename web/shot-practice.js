@@ -7,6 +7,7 @@
   function create(options = {}) {
     const onState = options.onState || (() => {});
     const onPrepare = options.onPrepare || (async () => true);
+    const onReset = options.onReset || (() => true);
     const analyze = options.analyze || (() => ({}));
     const onResult = options.onResult || (() => {});
     const getContext = options.getContext || (() => null);
@@ -26,8 +27,7 @@
     let generation = 0;
     let samples = [];
     let remaining = countdownSeconds;
-    let preparationReady = false;
-    let countdownComplete = false;
+    let resetStarted = false;
     let captureStartedAt = null;
     let captureDeadline = null;
 
@@ -44,6 +44,24 @@
       timer = schedule(callback, delay);
     }
 
+    async function beginShot(token, acknowledgeStart) {
+      if (token !== generation || resetStarted) return;
+      resetStarted = true;
+      timer = null;
+      try {
+        if (await acknowledgeStart() === false) throw new Error('The ESP32 did not acknowledge shot start.');
+        if (token !== generation) return;
+        update('resetting');
+        if (await onReset() === false) throw new Error('The ESP32 did not confirm that the IMU reset completed.');
+        if (token !== generation) return;
+      } catch (error) {
+        if (token !== generation) return;
+        update(state === 'resetting' ? 'reset-failed' : 'error', { message: error.message || String(error) });
+        return;
+      }
+      await prepareCycle(token);
+    }
+
     function beginCapture(token) {
       if (token !== generation) return;
       timer = null;
@@ -58,12 +76,7 @@
       if (token !== generation) return;
       if (remaining <= 1) {
         remaining = 0;
-        countdownComplete = true;
-        if (preparationReady) beginCapture(token);
-        else {
-          timer = null;
-          update('preparing');
-        }
+        beginCapture(token);
         return;
       }
       remaining--;
@@ -99,16 +112,16 @@
     }
 
     async function prepareCycle(token) {
+      update('stream-preparing');
       try {
         const prepared = await onPrepare();
         if (token !== generation) return;
         if (prepared === false) throw new Error('Could not prepare the bat for capture.');
-        preparationReady = true;
-        if (countdownComplete && state === 'preparing') beginCapture(token);
+        remaining = countdownSeconds;
+        update('countdown', { remaining });
+        scheduleAtDeadline(() => countdownTick(token), 1000);
       } catch (error) {
         if (token !== generation) return;
-        if (timer !== null) cancelTimer(timer);
-        timer = null;
         update('error', { message: error.message || String(error) });
       }
     }
@@ -124,23 +137,19 @@
         captureMs = milliseconds;
         return true;
       },
-      async start() {
+      async start(acknowledgeStart = async () => true) {
         if (state !== 'ready' && state !== 'error') return false;
         const token = ++generation;
         samples = [];
         remaining = countdownSeconds;
         activeCaptureMs = captureMs;
         activeContext = getContext();
-        preparationReady = false;
-        countdownComplete = false;
+        resetStarted = false;
         captureStartedAt = null;
         captureDeadline = null;
-        // Stance is calibrated explicitly before START. Stream preparation
-        // runs in the background; capture opens after the countdown and once
-        // fresh sensor data is available.
-        update('countdown', { remaining });
-        scheduleAtDeadline(() => countdownTick(token), 1000);
-        void prepareCycle(token);
+        // Keep the shot visibly busy while firmware accepts START and resets the IMU.
+        update('preparing');
+        void beginShot(token, acknowledgeStart);
         return true;
       },
       addSample(sample) {

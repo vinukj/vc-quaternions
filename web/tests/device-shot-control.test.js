@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { create, COMMAND_SHOT_BUSY, COMMAND_SHOT_READY } = require('../device-shot-control.js');
+const {
+  create, COMMAND_SHOT_BUSY, COMMAND_SHOT_READY, COMMAND_SENSOR_RESET,
+} = require('../device-shot-control.js');
 
 test('a connected device request locks the LCD before starting one browser shot cycle', async () => {
   const commands = [];
@@ -10,7 +12,7 @@ test('a connected device request locks the LCD before starting one browser shot 
     isConnected: () => true,
     getState: () => state,
     sendCommand: async command => { commands.push(command); return true; },
-    startCycle: async () => { starts++; state = 'preparing'; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); state = 'preparing'; return true; },
   });
 
   assert.equal(await control.requestStart(), true);
@@ -24,6 +26,73 @@ test('a connected device request locks the LCD before starting one browser shot 
   assert.deepEqual(commands, [COMMAND_SHOT_BUSY, COMMAND_SHOT_READY]);
 });
 
+test('only reports READY after firmware state readback confirms the next shot is enabled', async () => {
+  const commands = [];
+  let readbacks = 0;
+  const control = create({
+    isConnected: () => true,
+    sendCommand: async command => { commands.push(command); return true; },
+    readState: async () => { readbacks++; return { shotState: readbacks === 1 ? 'in_progress' : 'ready' }; },
+    verifyReady: state => state.shotState === 'ready',
+  });
+
+  assert.equal(await control.markReady(), true);
+  assert.deepEqual(commands, [COMMAND_SHOT_READY, COMMAND_SHOT_READY]);
+  assert.equal(readbacks, 2);
+});
+
+test('resets the IMU before countdown and waits for completion', async () => {
+  const commands = [];
+  const events = [];
+  const statuses = ['pending', 'complete'];
+  const control = create({
+    isConnected: () => true,
+    sendCommand: async command => { commands.push(command); return true; },
+    readState: async () => ({ imuResetStatus: statuses.shift() }),
+    onResetEvent: event => events.push(event),
+    wait: async () => {},
+  });
+
+  assert.equal(await control.resetSensor(), true);
+  assert.deepEqual(commands, [COMMAND_SENSOR_RESET]);
+  assert.deepEqual(events, ['requesting', 'sent', 'complete']);
+});
+
+test('reports a failed IMU reset write instead of implying the firmware ran it', async () => {
+  const events = [];
+  const control = create({
+    isConnected: () => true,
+    sendCommand: async () => false,
+    readState: async () => ({ imuResetStatus: 'pending' }),
+    onResetEvent: event => events.push(event),
+  });
+
+  assert.equal(await control.resetSensor(), false);
+  assert.deepEqual(events, ['requesting', 'write-failed']);
+});
+
+test('busy acknowledgement does not reset the sensor, and a completed shot is marked ready', async () => {
+  const commands = [];
+  let state = 'in_progress';
+  const control = create({
+    isConnected: () => true,
+    getState: () => 'ready',
+    sendCommand: async command => {
+      commands.push(command);
+      if (command === COMMAND_SHOT_READY) state = 'ready';
+      return true;
+    },
+    readState: async () => ({ shotState: state }),
+    verifyReady: value => value.shotState === 'ready',
+    startCycle: async acknowledgeStart => { void acknowledgeStart(); return true; },
+  });
+
+  assert.equal(await control.requestStart(), true);
+  assert.deepEqual(commands, [COMMAND_SHOT_BUSY]);
+  assert.equal(await control.markReady(), true);
+  assert.deepEqual(commands, [COMMAND_SHOT_BUSY, COMMAND_SHOT_READY]);
+});
+
 test('does not start when disconnected or while a shot is already in progress', async () => {
   let connected = false;
   let state = 'ready';
@@ -33,7 +102,7 @@ test('does not start when disconnected or while a shot is already in progress', 
     isConnected: () => connected,
     getState: () => state,
     sendCommand: async command => { commands.push(command); return true; },
-    startCycle: async () => { starts++; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); return true; },
   });
 
   assert.equal(await control.requestStart(), false);
@@ -53,7 +122,7 @@ test('blocks both browser and LCD start until config and stance are acknowledged
     isReady: () => ready,
     getState: () => 'ready',
     sendCommand: async () => { commands++; return true; },
-    startCycle: async () => { starts++; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); return true; },
   });
 
   assert.equal(await control.requestStart(), false);
@@ -76,7 +145,7 @@ test('a failed busy acknowledgement does not block START and is retried from rep
     getState: () => state,
     now: () => time,
     sendCommand: async () => ++commandAttempts > 1,
-    startCycle: async () => { starts++; state = 'countdown'; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); state = 'countdown'; return true; },
   });
 
   assert.equal(await control.requestStart(), true, 'browser countdown starts without waiting on LCD acknowledgement');
@@ -99,7 +168,7 @@ test('LCD start returns while the busy acknowledgement is still pending', async 
     isConnected: () => true,
     getState: () => 'ready',
     sendCommand: async () => new Promise(resolve => { resolveBusy = resolve; }),
-    startCycle: async () => { starts++; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); return true; },
   });
 
   const request = control.requestStart();
@@ -119,7 +188,7 @@ test('repeated asserted device START notifications create one cycle until the fl
     isConnected: () => true,
     getState: () => state,
     sendCommand: async command => { commands.push(command); return true; },
-    startCycle: async () => { starts++; state = 'countdown'; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); state = 'countdown'; return true; },
   });
 
   assert.equal(await control.requestDeviceStart(), true);
@@ -147,7 +216,7 @@ test('low START packets during an active shot do not re-arm a bouncing touch req
     isConnected: () => true,
     getState: () => state,
     sendCommand: async () => true,
-    startCycle: async () => { starts++; state = 'countdown'; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); state = 'countdown'; return true; },
   });
 
   assert.equal(await control.requestDeviceStart(), true);
@@ -172,7 +241,7 @@ test('a low START level during capture cannot re-arm the latch before the shot r
     isConnected: () => true,
     getState: () => state,
     sendCommand: async () => true,
-    startCycle: async () => { starts++; state = 'countdown'; return true; },
+    startCycle: async acknowledgeStart => { starts++; void acknowledgeStart(); state = 'countdown'; return true; },
   });
 
   assert.equal(await control.requestDeviceStart(), true);

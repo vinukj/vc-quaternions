@@ -236,6 +236,28 @@ test('CSV has one complete row per recorded shot and retains raw samples and geo
   assert.equal(history.count, 2);
 });
 
+test('history and CSV retain the stance quaternion needed to replay relative shot samples', () => {
+  const history = ShotHistory.create(new FakeElement('history'), { createElement: tag => new FakeElement(tag) });
+  const stanceReference = { w: 0.9, x: 0.1, y: -0.2, z: 0.3 };
+  const orientationReference = { w: 0.7, x: -0.1, y: 0.4, z: 0.5 };
+  const samples = [{ w: 0.8, x: 0.2, y: 0.1, z: -0.4, t: 20 }];
+
+  history.append({ direction: 'Right' }, new Date('2026-11-20T10:00:00Z'), samples, null, null, null, stanceReference, orientationReference);
+  stanceReference.w = 0;
+  orientationReference.w = 0;
+
+  assert.deepEqual(history.records[0].stanceReference, { w: 0.9, x: 0.1, y: -0.2, z: 0.3 },
+    'the record owns an immutable snapshot of the reference used by the classifier');
+  assert.deepEqual(history.records[0].orientationReference, { w: 0.7, x: -0.1, y: 0.4, z: 0.5 },
+    'the orientation is stored separately and snapshotted per shot');
+  const [header, row] = history.toCSV().trimEnd().split('\r\n');
+  const columns = header.split(',');
+  const cells = parseCsvRow(row);
+  assert.deepEqual(JSON.parse(cells[columns.indexOf('guard_reference_json')]), history.records[0].stanceReference);
+  assert.deepEqual(JSON.parse(cells[columns.indexOf('orientation_reference_json')]), history.records[0].orientationReference);
+  assert.deepEqual(JSON.parse(cells[columns.indexOf('samples_json')]), samples);
+});
+
 test('history and CSV distinguish configured capture time from received packet count and timestamp span', () => {
   const container = new FakeElement('history');
   const history = ShotHistory.create(container, { createElement: tag => new FakeElement(tag) });

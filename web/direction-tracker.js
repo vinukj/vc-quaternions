@@ -39,12 +39,6 @@
     };
   }
 
-  function rotateVector(q, vector) {
-    const point = { w: 0, x: vector.x, y: vector.y, z: vector.z };
-    const rotated = multiply(multiply(q, point), conjugate(q));
-    return { x: rotated.x, y: rotated.y, z: rotated.z };
-  }
-
   function directionFor(dx, dy) {
     const distance = Math.hypot(dx, dy);
     if (distance < MIN_MOVEMENT) return { label: 'No clear movement', distance };
@@ -120,7 +114,7 @@
           clearPending();
           return { x, y, dx: 0, dy: 0, moved: false, heading };
         }
-
+        
         // short-circuit if current == previous (with tolerance)
         if (Math.abs(current.w - previous.w) < 1e-10 &&
             Math.abs(current.x - previous.x) < 1e-10 &&
@@ -164,11 +158,7 @@
         // them. Projecting the roll component out of every rotation is wrong:
         // after yawing, a real screen-vertical pitch also has an X-axis
         // component and projection would turn that pitch into diagonal motion.
-        const rollAxis = rotateVector(current, { x: 1, y: 0, z: 0 });
-        const rollAlignment = Math.abs(
-          angularVector.x * rollAxis.x + angularVector.y * rollAxis.y + angularVector.z * rollAxis.z
-        ) / angle;
-        if (rollAlignment >= 0.92) {
+        if (BatScreenFrame.isAxialRoll(angularVector, current)) {
           clearPending();
           return { x, y, dx: 0, dy: 0, moved: false, heading };
         }

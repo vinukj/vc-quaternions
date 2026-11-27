@@ -15,5 +15,19 @@
     return { x: rotation.z, y: -rotation.y };
   }
 
-  return { rotationToScreen };
+  function isAxialRoll(rotation, pose, minimumAlignment = 0.92) {
+    const magnitude = Math.hypot(rotation.x, rotation.y, rotation.z);
+    if (!Number.isFinite(magnitude) || magnitude < 1e-10 || !pose) return false;
+
+    const { w, x, y, z } = pose;
+    const axis = {
+      x: w*w + x*x - y*y - z*z,
+      y: 2 * (x*y + w*z),
+      z: 2 * (x*z - w*y),
+    };
+    const alignment = Math.abs(rotation.x * axis.x + rotation.y * axis.y + rotation.z * axis.z) / magnitude;
+    return alignment >= minimumAlignment;
+  }
+
+  return { rotationToScreen, isAxialRoll };
 });

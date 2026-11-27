@@ -16,11 +16,16 @@
  *       offset 8..11  q.y   float32 LE
  *       offset 12..15 q.z   float32 LE
  *       offset 16     flags uint8 — bit0 = swing start, bit1 = LCD start request
- *   - Command: single byte WRITE (0x01..0x09), or versioned 8-byte config
- *     frame [0xA1, version, sequence, difficulty, bowled%, edge%, window LE]
+ *   - Command: single byte WRITE (0x01..0x0B), two-byte sampling-cadence
+ *     frame [0x0B, sampcnt], or versioned 8-byte config frame
+ *     [0xA1, version, sequence, difficulty, bowled%, edge%, window LE]
+ *     sampcnt 1..4 -> notify every 4th/3rd/2nd/1st sample (50/67/100/200 Hz)
  *   - State READ: 26 bytes [0xA1, version, sequence, flags, difficulty,
- *     bowled%, edge%, window LE, reserved, stance quaternion w/x/y/z LE]
+ *     bowled%, edge%, window LE, reset/shot/cadence status, stance quaternion
+ *     w/x/y/z LE]
  *     flags bit 0 = config accepted; bit 1 = stance/guard active
+ *     status low 2 bits = IMU reset; bits 2..3 = shot lifecycle;
+ *     bits 4..5 = sampling-cadence code (sampcnt - 1)
  *
  * Coordinate convention (QMI8658 / Madgwick, Z-up):
  *   X-forward, Y-left, Z-up. Client rotates by -90° about X to get Y-up
@@ -57,12 +62,17 @@ void ble_server_notify_quaternion(const madgwick_quaternion_t *q, uint8_t flags)
  *   0x04  Clear Ref     — revert to absolute orientation (drop guard reference)
  *   0x05  Start stream  — enable BLE quaternion notifications
  *   0x06  Pause stream  — disable notifications, keep IMU fusion running
- *   0x08  Shot accepted — clear the LCD request and lock Start during a shot
+ *   0x08  Shot accepted — clear the LCD request and lock Start during a shot; no sensor reset
  *   0x09  Shot complete — unlock LCD Start for the next shot
+ *   0x0A  Reset QMI8658 only — accepted during a shot; BLE and session remain active
+ *   0x0B  Set sampling cadence — two-byte frame [0x0B, sampcnt]; sampcnt 1..4
  * @param cmd  command byte
  * @return ESP_OK if command accepted
  */
 esp_err_t ble_server_handle_command(uint8_t cmd);
+
+/** BLE notify divisor (4/3/2/1) for the current sampling cadence. */
+uint8_t ble_server_get_notify_skip(void);
 
 /**
  * Initialize the BLE server (NimBLE). Starts advertising immediately.
@@ -100,6 +110,9 @@ ble_shot_state_t ble_server_get_shot_state(void);
 
 /** True only when BLE streaming, game config, stance, and shot state allow START. */
 bool ble_server_is_start_ready(void);
+
+/** Publish the result of an IMU-owner-task sensor-only reset for BLE readback. */
+void ble_server_set_sensor_reset_result(bool succeeded);
 
 /** Latch an LCD Start touch request for delivery in notification flag bit 1.
  * Returns false until a client has configured the game and captured a stance.

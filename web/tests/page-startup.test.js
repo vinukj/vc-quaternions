@@ -62,12 +62,14 @@ class FakeElement {
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
 }
 
-test('shot map starts without loading the optional Three.js preview', () => {
+test('shot map starts without loading the optional Three.js preview', async () => {
   const html = fs.readFileSync(path.join(webDir, 'index.html'), 'utf8');
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   const elements = new Map(ids.map(id => [id, new FakeElement(id)]));
   const appendedScripts = [];
   const persistedConfig = new Map();
+  const resetLogs = [];
+  let readyRequests = 0;
   const document = {
     getElementById: id => elements.get(id),
     createElement: tag => new FakeElement(tag),
@@ -91,7 +93,12 @@ test('shot map starts without loading the optional Three.js preview', () => {
     clearInterval() {},
     setTimeout,
     clearTimeout,
-    console,
+    console: {
+      info: (...args) => resetLogs.push(['info', ...args]),
+      warn: (...args) => resetLogs.push(['warn', ...args]),
+      error() {},
+      log() {},
+    },
   });
 
   for (const file of ['direction-tracker.js', 'wagon-wheel.js', 'shot-classifier.js', 'game-layer.js', 'shot-report.js', 'shot-practice.js', 'shot-history.js', 'quaternion-packet-gate.js', 'shot-guard.js', 'device-shot-control.js', 'ble-command-queue.js', 'stream-recovery.js', 'device-config.js', 'stance-calibration.js', 'ble-session-setup.js']) {
@@ -99,6 +106,8 @@ test('shot map starts without loading the optional Three.js preview', () => {
   }
   let practiceOptions;
   let practiceInstance;
+  let shotControlOptions;
+  let sensorResetRequests = 0;
   context.ShotPractice.create = options => {
     practiceOptions = options;
     practiceInstance = {
@@ -108,6 +117,13 @@ test('shot map starts without loading the optional Three.js preview', () => {
     };
     return practiceInstance;
   };
+  context.DeviceShotControl.create = options => {
+    shotControlOptions = options;
+    return {
+      markReady: async () => { readyRequests++; return true; },
+      resetSensor: async () => { sensorResetRequests++; return true; },
+    };
+  };
   const inlineScripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
     .map(match => match[1])
     .filter(source => source.trim());
@@ -116,16 +132,43 @@ test('shot map starts without loading the optional Three.js preview', () => {
 
   assert.equal(elements.get('status').textContent, 'Ready — click "Connect to Bat"');
   assert.ok(elements.get('btn-air-mouse').listeners.has('click'), 'PowerplAi Tracker action is visible and wired');
+  assert.ok(elements.get('btn-take-orientation').listeners.has('click'), 'bat orientation calibration is available as a separate action');
+  assert.ok(elements.get('btn-take-stance').listeners.has('click'), 'batting stance calibration remains a separate action');
   assert.ok(elements.get('history-toggle').listeners.has('click'), 'history disclosure is wired');
   assert.ok(elements.get('history-download').listeners.has('click'), 'CSV download control is wired');
   assert.ok(elements.get('history-clear').listeners.has('click'), 'clear-history control is wired');
   assert.equal(elements.get('history-download').disabled, true, 'CSV download starts disabled until a shot is captured');
   assert.equal(elements.get('history-clear').disabled, true, 'clear starts disabled while history is empty');
   assert.equal(elements.get('history-list').hidden, true, 'history starts collapsed');
-  assert.deepEqual(['game-difficulty', 'game-bowled-prob', 'game-edge-prob', 'game-capture-window-ms'].map(id => elements.get(id).value),
-    ['dry_pitch', '3', '10', '525'], 'game settings start with the agreed defaults');
+  assert.deepEqual(['game-difficulty', 'game-bowled-prob', 'game-edge-prob', 'game-capture-window-ms', 'game-sampcnt'].map(id => elements.get(id).value),
+    ['dry_pitch', '3', '10', '525', '1'], 'game settings start with the agreed defaults');
   assert.equal(practiceOptions.captureMs, 525, 'the configured default reaches the capture cycle');
-  for (const id of ['game-difficulty', 'game-bowled-prob', 'game-edge-prob', 'game-capture-window-ms']) {
+  assert.equal(typeof shotControlOptions.readState, 'function', 'shot control reads the ESP32 state characteristic');
+  assert.equal(shotControlOptions.verifyReady({ shotState: 'ready' }), true);
+  assert.equal(shotControlOptions.verifyReady({ shotState: 'in_progress' }), false);
+  assert.equal(typeof practiceOptions.onReset, 'function', 'shot preparation is wired to the acknowledged device reset');
+  assert.equal(await practiceOptions.onReset(), true, 'the pre-countdown callback requests the IMU-only reset');
+  assert.equal(sensorResetRequests, 1);
+  assert.equal(typeof shotControlOptions.onResetEvent, 'function', 'reset lifecycle events are connected to the browser console');
+  shotControlOptions.onResetEvent('sent');
+  shotControlOptions.onResetEvent('write-failed');
+  assert.deepEqual(resetLogs.map(row => [row[0], row[1]]), [
+    ['info', '[IMU reset] sent'], ['warn', '[IMU reset] write-failed'],
+  ]);
+  practiceOptions.onState('resetting');
+  assert.equal(elements.get('capture-readout').textContent, 'Preparing IMU…',
+    'the reset phase stays visibly Preparing IMU, not Ready');
+  assert.equal(elements.get('btn-air-mouse').disabled, true,
+    'a second shot cannot be started while the IMU reset is pending');
+  practiceOptions.onState('reset-failed', { message: 'The ESP32 did not confirm that the IMU reset completed.' });
+  assert.equal(elements.get('capture-readout').textContent, 'IMU reset failed',
+    'a failed reset is not presented as an ordinary recoverable shot error');
+  assert.equal(elements.get('btn-air-mouse').disabled, true,
+    'START remains locked until the reset issue is recovered');
+  assert.equal(readyRequests, 0, 'reset failure must not send 0x09 and falsely unlock the ESP32');
+  assert.match(html, /shot-practice\.js\?v=[^" ]+/);
+  assert.match(html, /device-shot-control\.js\?v=[^" ]+/);
+  for (const id of ['game-difficulty', 'game-bowled-prob', 'game-edge-prob', 'game-capture-window-ms', 'game-sampcnt']) {
     assert.ok(elements.get(id).listeners.has('change'), `${id} persists and applies when changed`);
   }
   elements.get('game-capture-window-ms').value = '400';
@@ -172,19 +215,41 @@ test('shot map starts without loading the optional Three.js preview', () => {
     'web START and LCD START share the same guarded shot cycle');
   assert.match(inlineScripts[0], /captureReadout\.textContent = String\(detail\.remaining/, 'the web UI visibly renders each countdown number');
   assert.match(inlineScripts[0], /const sessionSetup = BleSessionSetup\.create\(/, 'BLE session setup owns config and stance readiness');
+  assert.match(inlineScripts[0], /sessionSetup\.calibrateOrientation\(/, 'the orientation action uses the setup module API');
   assert.match(inlineScripts[0], /sessionSetup\.calibrateStance\(/, 'the explicit stance action calibrates once per connection');
-  assert.match(elements.get('stance-reference').textContent, /saved pose becomes Straight · 0° for this session/i,
+  const calibrationStart = inlineScripts[0].indexOf('async function runSetupCalibration(kind)');
+  const calibrationEnd = inlineScripts[0].indexOf('async function cancelSetupDialog()', calibrationStart);
+  const calibration = inlineScripts[0].slice(calibrationStart, calibrationEnd);
+  assert.ok(calibration.indexOf('streamRecovery.ensureFreshPacket(') < calibration.indexOf('sessionSetup.calibrateOrientation('),
+    'orientation stability timing starts only after a fresh sensor packet is available');
+  assert.ok(calibration.indexOf('streamRecovery.ensureFreshPacket(') < calibration.indexOf('sessionSetup.calibrateStance('),
+    'stance stability timing starts only after a fresh sensor packet is available');
+  assert.match(calibration, /No quaternion data arrived from the ESP32/,
+    'the setup dialog explains when sensor packets never arrive');
+  assert.match(calibration, /calibrationRequestId/,
+    'closing setup while waiting for packets cannot start a hidden calibration afterward');
+  const setupLocks = [...inlineScripts[0].matchAll(/const setupLocked = ([^;]+);/g)].map(match => match[1]);
+  assert.equal(setupLocks.length, 2, 'both calibration-aware UI update paths define their setup lock');
+  assert.ok(setupLocks.every(lock => lock.includes('calibrationRequestPending')),
+    'orientation and stance controls stay visibly locked while waiting for a fresh sensor packet');
+  assert.match(inlineScripts[0], /sessionSetup\.observeCalibrationSample\(q, now\)/, 'BLE samples feed the setup stability tracker');
+  assert.match(inlineScripts[0], /sessionSetup\.cancelSetupCalibration\(true\)/, 'the setup dialog cancels through the exported setup API');
+  assert.match(elements.get('stance-reference').textContent, /stance not set/i,
     'the initial UI explains how the captured stance defines the neutral reference');
+  assert.match(elements.get('orientation-reference').textContent, /orientation not set/i,
+    'the initial UI reports the separate bat-orientation reference');
   assert.match(inlineScripts[0], /Saved stance direction: Straight · 0° session-relative baseline/,
     'stance calibration confirmation identifies the session-relative direction');
   assert.match(inlineScripts[0], /Shot directions are measured from this pose; this is not a compass heading/,
     'the UI explains the relative frame without implying absolute yaw');
   assert.match(inlineScripts[0], /ESP32 ACK ✓.*Browser uses this window/,
     'the UI reports verified ESP32 readback, not only a browser-local setting');
-  assert.match(inlineScripts[0], /browser uses this window.*BLE stays at 50 Hz/i,
-    'the UI separates browser capture duration from the fixed BLE notification cadence');
+  assert.match(inlineScripts[0], /browser uses this window; BLE sends at \$\{hz\} Hz/i,
+    'the UI separates browser capture duration from the configured BLE notification cadence');
   assert.match(inlineScripts[0], /referenceQuaternion: shotGuardReference/,
     'shot classification uses the same saved stance frame as the live direction tracker');
+  assert.match(inlineScripts[0], /shotHistory\.append\(r, new Date\(\), samples, geometry, gameOutcome, captureDetail, shotGuardReference, sessionSetup\.orientationReference\)/,
+    'every history row retains separate stance and bat-orientation references');
   assert.match(inlineScripts[0], /showShot\(result, samples, geometry, gameOutcome, captureDetail\)/,
     'the configured window and observed packet diagnostics reach the result display');
   assert.doesNotMatch(inlineScripts[0], /onTakeGuard\s*:/, 'shot countdown never recaptures session stance');
@@ -205,9 +270,16 @@ test('shot map starts without loading the optional Three.js preview', () => {
   assert.match(html, /id="history-clear"[^>]*aria-label="Clear shot history"/);
   assert.match(html, /id="game-outcome-json"/);
   assert.match(html, /id="game-config"/);
+  assert.ok(html.indexOf('id="track-footnote"') < html.indexOf('id="orientation-reference"') &&
+    html.indexOf('id="orientation-reference"') < html.indexOf('id="stance-reference"') &&
+    html.indexOf('id="stance-reference"') < html.indexOf('id="practice-controls"'),
+  'both calibration statuses are visible immediately below the wagon-wheel map');
   assert.match(html, /\$\{resultGeometry\.fieldZone\} · \$\{resultGeometry\.direction\} · \$\{resultGeometry\.mappedSector\}/,
     'the wagon-wheel callout exposes the broad direction zone next to its detailed sector');
-  assert.match(html, /<script src="game-layer\.js"><\/script>/);
+  assert.match(html, /<script src="game-layer\.js\?v=[^" ]+"><\/script>/,
+    'the game config module is cache-busted so the sampling-cadence default is not served stale');
+  assert.match(html, /<script src="stance-calibration\.js\?v=20261126-windowed-stability"><\/script>/,
+    'the browser reloads the updated stability tracker instead of a cached calibration loop');
   assert.doesNotMatch(html, /Swing history \(last 5\)/i);
   const mainMarkup = html.slice(html.indexOf('<main id="practice">'), html.indexOf('</main>'));
   assert.doesNotMatch(mainMarkup, /id="btn-shot-start"/, 'the LCD button owns shot-cycle start');
@@ -264,6 +336,8 @@ test('a stalled sensor stream restarts notifications without deliberately discon
   const watchdogStart = html.indexOf('// Keep the rate/status useful when notifications stop arriving.');
   const watchdog = html.slice(watchdogStart, html.indexOf('/* Init. */', watchdogStart));
   assert.match(html, /streamRecovery\s*=\s*StreamRecovery\.create\(/);
+  assert.match(html, /stream-recovery\.js\?v=20261126-post-readback-calibration/,
+    'the browser reloads the fresh-packet recovery helper');
   assert.match(watchdog, /streamRecovery\.check\(now\)/);
   assert.doesNotMatch(watchdog, /\.gatt\.disconnect\(\)/,
     'notification stalls may restart streaming but must keep the user-owned BLE connection');

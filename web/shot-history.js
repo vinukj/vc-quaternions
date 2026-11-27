@@ -18,7 +18,7 @@
     'game_direction', 'game_shot', 'game_family', 'game_lofted', 'game_runs', 'game_dist_normalized', 'game_height_normalized',
     'game_aggression', 'game_peak_deg_s', 'game_angle_deg', 'game_timing', 'game_out', 'game_dismissal', 'game_edged',
     'game_difficulty', 'game_bowled_prob', 'game_edge_base_prob', 'game_capture_window_ms',
-    'rendered_map_json', 'result_json', 'game_outcome_json', 'samples_json',
+    'rendered_map_json', 'result_json', 'game_outcome_json', 'guard_reference_json', 'orientation_reference_json', 'samples_json',
   ];
 
   function fixed(value) {
@@ -43,7 +43,7 @@
     let count = 0;
     const records = [];
 
-    function append(result = {}, timestamp = new Date(), samples = [], geometry = null, gameOutcome = null, captureDetail = null) {
+    function append(result = {}, timestamp = new Date(), samples = [], geometry = null, gameOutcome = null, captureDetail = null, stanceReference = null, orientationReference = null) {
       count += 1;
       const time = timestamp instanceof Date ? timestamp : new Date(timestamp);
       const timestampText = Number.isNaN(time.getTime()) ? String(timestamp) : time.toISOString();
@@ -55,6 +55,8 @@
         geometry: geometry ? JSON.parse(JSON.stringify(geometry)) : null,
         gameOutcome: gameOutcome ? JSON.parse(JSON.stringify(gameOutcome)) : null,
         captureDetail: captureDetail ? JSON.parse(JSON.stringify(captureDetail)) : null,
+        stanceReference: stanceReference ? JSON.parse(JSON.stringify(stanceReference)) : null,
+        orientationReference: orientationReference ? JSON.parse(JSON.stringify(orientationReference)) : null,
       });
       const entry = documentRef.createElement('article');
       entry.className = 'history-entry';
@@ -158,7 +160,7 @@
           game.direction, game.shot, game.family, game.lofted, game.runs, game.dist, game.h,
           game.agg, game.peak, game.angle, game.timing, game.out, game.dismissal, game.edged,
           game.difficulty, game.bowled_prob, game.edge_base_prob, game.capture_window_ms,
-          json(geometry), json(result), json(record.gameOutcome), json(record.samples),
+          json(geometry), json(result), json(record.gameOutcome), json(record.stanceReference), json(record.orientationReference), json(record.samples),
         ];
         return values.map(csvCell).join(',');
       });

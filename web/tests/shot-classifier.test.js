@@ -95,6 +95,55 @@ test('shot direction stays screen-relative when firmware packets use a rotated g
   assert.ok(Math.abs(result.peakAngularVelocityRadS - (70 * Math.PI / 180) / 0.7) < 0.02);
 });
 
+test('completed-shot direction uses the same stance-frame axes as the live pointer after bat roll', () => {
+  let pose = { w: 1, x: 0, y: 0, z: 0 };
+  const samples = [{ ...pose, t: 0 }];
+  for (let index = 1; index <= 6; index++) {
+    pose = multiply(axisAngle({ x: 1, y: 0, z: 0 }, 7.5), pose);
+    samples.push({ ...pose, t: index * 20 });
+  }
+  for (let index = 1; index <= 22; index++) {
+    pose = multiply(axisAngle({ x: 0, y: 1, z: 0 }, -4), pose);
+    samples.push({ ...pose, t: (index + 6) * 20 });
+  }
+
+  const result = analyzeShot(samples);
+
+  assert.equal(result.direction, 'Down', 'a screen-vertical turn after axial roll must not become diagonal');
+});
+
+test('completed-shot direction ignores roll around the turned bat axis like the live pointer', () => {
+  let pose = { w: 1, x: 0, y: 0, z: 0 };
+  const samples = [{ ...pose, t: 0 }];
+  for (let index = 1; index <= 10; index++) {
+    pose = multiply(axisAngle({ x: 0, y: 0, z: 1 }, 9), pose);
+    samples.push({ ...pose, t: index * 20 });
+  }
+  for (let index = 1; index <= 15; index++) {
+    pose = multiply(axisAngle({ x: 0, y: 1, z: 0 }, 6), pose);
+    samples.push({ ...pose, t: (index + 10) * 20 });
+  }
+
+  const result = analyzeShot(samples);
+
+  assert.equal(result.direction, 'Right', 'current-axis roll after turning must not redirect the field heading');
+  assert.equal(result.fieldSector, 'Point');
+});
+
+test('angular speed is stable when identical 50 Hz samples arrive with callback timestamp jitter', () => {
+  const regular = samplesFor({ x: 0, y: 0, z: 1 });
+  const intervals = [...Array(12).fill(5), ...Array(12).fill(35), 20];
+  const timestamps = [0];
+  for (const interval of intervals) timestamps.push(timestamps.at(-1) + interval);
+  const jittered = regular.map((sample, index) => ({ ...sample, t: timestamps[index] }));
+
+  const regularResult = analyzeShot(regular);
+  const jitteredResult = analyzeShot(jittered);
+
+  assert.ok(Math.abs(jitteredResult.peakAngularVelocityRadS - regularResult.peakAngularVelocityRadS) < 0.02,
+    'callback scheduling jitter must not turn the same sensor motion into implausible bat speed');
+});
+
 test('reports pitch direction and a heuristic drive family without claiming certainty', () => {
   const result = analyzeShot(samplesFor({ x: 0, y: 1, z: 0 }, { degrees: 80 }));
 
@@ -277,17 +326,17 @@ test('direction consistency discounts a direction supported by only one active p
 });
 
 test('estimates aggression from configurable bat angular-speed bands', () => {
-  const controlled = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 50, durationMs: 1000 }), {
+  const controlled = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 50, durationMs: 1000, count: 51 }), {
     swingThresholdRad: 0.5,
     powerLow: 1,
     powerHigh: 2,
   });
-  const assertive = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 100, durationMs: 1000 }), {
+  const assertive = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 100, durationMs: 1000, count: 51 }), {
     swingThresholdRad: 0.5,
     powerLow: 1,
     powerHigh: 2,
   });
-  const aggressive = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 180, durationMs: 1000 }), {
+  const aggressive = analyzeShot(samplesFor({ x: 0, y: 0, z: -1 }, { degrees: 180, durationMs: 1000, count: 51 }), {
     swingThresholdRad: 0.5,
     powerLow: 1,
     powerHigh: 2,
@@ -371,6 +420,19 @@ test('uses the net orientation change as a minimum rotation estimate with only t
   assert.ok(Math.abs(result.rotationDegrees - 90) < 0.01);
   assert.ok(Math.abs(result.netRotationDegrees - 90) < 0.01);
   assert.equal(result.peakAngularVelocityRadS, 0);
+});
+
+test('uses the configured sample rate for angular speed instead of assuming 50 Hz', () => {
+  const samples = samplesFor({ x: 0, y: 0, z: 1 }, { degrees: 90, durationMs: 500, count: 51 });
+
+  const at100 = analyzeShot(samples, { sampleRateHz: 100 });
+  const at50 = analyzeShot(samples, { sampleRateHz: 50 });
+
+  assert.ok(Math.abs(at100.peakAngularVelocityRadS - Math.PI) < 0.02,
+    'the same physical speed is reported when the 100 Hz cadence is configured');
+  assert.ok(Math.abs(at50.peakAngularVelocityRadS - Math.PI / 2) < 0.02,
+    'assuming 50 Hz for 100 Hz samples would halve the apparent bat speed');
+  assert.equal(at100.sampleRateHz, 100);
 });
 
 test('non-finite samples are ignored and cannot poison the motion estimate', () => {

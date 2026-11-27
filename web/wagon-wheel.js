@@ -75,7 +75,7 @@
 
   function fieldZoneForSector(fieldSector) {
     if (fieldSector === 'Straight') return 'Straight';
-    if (fieldSector === 'Behind batter') return 'Behind wicket';
+    if (fieldSector === 'Behind batter') return 'Behind batter';
     if (fieldSector === 'Cover') return 'Offside front';
     if (['Point', 'Third man'].includes(fieldSector)) return 'Offside back';
     if (fieldSector === 'Mid-on') return 'Legside front';

@@ -57,14 +57,14 @@ test('shot report and accessibility label use the same vector direction as the w
   assert.equal(geometry.direction, 'Down');
   assert.equal(geometry.fieldSector, 'Behind batter');
   assert.equal(report.displayedFields[0], 'Direction: Down · Behind batter');
-  assert.equal(report.displayedFields[1], 'Direction zone: Behind wicket');
+  assert.equal(report.displayedFields[1], 'Direction zone: Behind batter');
   assert.equal(report.displayedFields[2], 'Likely shot type: Back-foot / glance-like swing');
   assert.ok(report.displayedFields.includes('Side: Behind the batter'));
   assert.match(report.groundAriaLabel, /bat direction Down; mapped sector Behind batter/);
   assert.match(report.groundAriaLabel, /stroke estimate Back-foot \/ glance-like swing/);
   assert.equal(report.displayedDirection, 'Down');
   assert.equal(report.displayedFieldSector, 'Behind batter');
-  assert.equal(report.displayedFieldZone, 'Behind wicket');
+  assert.equal(report.displayedFieldZone, 'Behind batter');
   assert.equal(report.displayedShotType, 'Back-foot / glance-like swing');
   assert.equal(report.displayedSideEstimate, 'Behind the batter');
   assert.equal(report.result.direction, 'Right', 'raw classifier direction stays in the diagnostic payload');

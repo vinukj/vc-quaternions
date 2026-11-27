@@ -35,7 +35,13 @@
     #btn-connect:hover:not(:disabled) { background: #2ea043; }
     #btn-connect:disabled { opacity: 0.4; cursor: not-allowed; }
     #btn-connect.reconnect { background: #d29922; }
-    .connection-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .connection-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    #btn-take-orientation {
+      padding: 10px 14px; font-size: 0.85rem; border: 1px solid #8957e5; border-radius: 8px;
+      cursor: pointer; font-weight: 700; background: #6e40c9; color: #fff;
+    }
+    #btn-take-orientation:hover:not(:disabled) { background: #8957e5; }
+    #btn-take-orientation:disabled { opacity: 0.4; cursor: not-allowed; }
     #btn-take-stance {
       padding: 10px 14px; font-size: 0.85rem; border: 1px solid #1f6feb; border-radius: 8px;
       cursor: pointer; font-weight: 700; background: #1f6feb; color: #fff;
@@ -104,13 +110,13 @@
     #mouse-status { min-height: 1.4em; color: #58a6ff; font-size: 0.9rem; font-weight: 750; text-align: center; }
     #capture-readout { min-height: 1.2em; color: #e6edf3; font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
     #capture-readout[data-state="capturing"] { color: #3fb950; }
-    #capture-readout[data-state="error"] { color: #f85149; }
+    #capture-readout[data-state="error"], #capture-readout[data-state="reset-failed"] { color: #f85149; }
     #capture-instruction { min-height: 2.4em; max-width: 330px; text-align: center; color: #8b949e; font-size: 0.78rem; line-height: 1.35; }
     #mouse-message { min-height: 2.4em; text-align: center; color: #8b949e; font-size: 0.78rem; line-height: 1.35; }
     #mouse-message[data-kind="error"] { color: #f85149; }
     #mouse-message[data-kind="success"] { color: #3fb950; }
-    #stance-reference, #game-config-status { max-width: 420px; color: #8b949e; font-size: 0.72rem; line-height: 1.4; text-align: center; }
-    #stance-reference[data-state="set"], #game-config-status[data-state="acknowledged"] { color: #3fb950; }
+    #orientation-reference, #stance-reference, #game-config-status { max-width: 560px; color: #8b949e; font-size: 0.72rem; line-height: 1.4; text-align: center; }
+    #orientation-reference[data-state="set"], #stance-reference[data-state="set"], #game-config-status[data-state="acknowledged"] { color: #3fb950; }
     #game-config-status[data-state="error"] { color: #f85149; }
     #btn-air-mouse, #btn-shot-start {
       width: 100%; min-height: 58px; padding: 12px 16px;
@@ -172,6 +178,7 @@
       .controls { grid-template-columns: repeat(2, 1fr); }
       .topbar { align-items: flex-start; }
       #btn-connect { padding: 10px 14px; }
+      .connection-actions { justify-content: flex-start; }
       .history-entry dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -253,6 +260,7 @@
       <div class="connection-actions">
         <button id="btn-connect">Connect to Bat</button>
         <button id="btn-disconnect" disabled>Disconnect</button>
+        <button id="btn-take-orientation" type="button" disabled>Set Bat Orientation · 3 s</button>
         <button id="btn-take-stance" type="button" disabled>Take Stance · 3 s</button>
       </div>
       <p id="status">Not connected</p>
@@ -279,19 +287,20 @@
         </select>
       </label>
       <p id="track-footnote">Direction follows the dominant swing lobe through its speed peak; slower late follow-through is excluded. Mount: display faces the batter, +X points down the bat toward the handle, and axial X-roll is ignored; Y/Z provide the screen-plane direction. These are IMU estimates, and signed field directions still need calibration with real swings.</p>
+      <p id="orientation-reference" data-state="unset" role="status" aria-live="polite">Bat orientation not set. Align the bat with the straight-down-pitch 0° reference after connecting.</p>
+      <p id="stance-reference" data-state="unset" role="status" aria-live="polite">Stance not set. The saved batting pose becomes Straight · 0° for this session.</p>
     </section>
     <section id="practice-controls" aria-label="Shot capture controls">
       <div id="mouse-status" aria-live="polite">No shot captured</div>
       <div id="capture-readout" data-state="ready" aria-live="polite">Ready</div>
       <div id="capture-instruction">Connect the bat, apply game settings, then take your stance before starting a shot.</div>
-      <p id="stance-reference" data-state="unset" role="status" aria-live="polite">Stance reference not set. Connect and take stance; the saved pose becomes Straight · 0° for this session.</p>
       <div id="mouse-message" data-kind="info">Connect to the bat, confirm the game settings, then hold your batting stance steady for 3 seconds. The stance is kept for this BLE session.</div>
       <div class="main-actions">
         <button id="btn-air-mouse" type="button" aria-pressed="false" disabled>Start PowerplAi Tracker</button>
       </div>
       <details id="game-config" open>
         <summary id="game-config-summary">Game config · Dry pitch · 525 ms</summary>
-        <p id="game-config-status" data-state="pending" role="status" aria-live="polite">Settings will be sent to and acknowledged by the ESP32 after connecting. Sensor notifications remain at 50 Hz.</p>
+        <p id="game-config-status" data-state="pending" role="status" aria-live="polite">Settings will be sent to and acknowledged by the ESP32 after connecting. The BLE sampling cadence is selected below and read back before START is enabled.</p>
         <div id="game-config-grid">
           <label for="game-difficulty">Pitch difficulty
             <select id="game-difficulty">
@@ -315,6 +324,14 @@
               <option value="700">700 ms</option>
               <option value="800">800 ms</option>
               <option value="900">900 ms</option>
+            </select>
+          </label>
+          <label for="game-sampcnt">BLE sampling cadence
+            <select id="game-sampcnt">
+              <option value="1" selected>50 Hz (every 4th)</option>
+              <option value="2">67 Hz (every 3rd)</option>
+              <option value="3">100 Hz (every 2nd)</option>
+              <option value="4">200 Hz (every sample)</option>
             </select>
           </label>
         </div>
@@ -396,20 +413,20 @@
 
   <script src="bat-screen-frame.js"></script>
   <script src="direction-tracker.js"></script>
-  <script src="wagon-wheel.js"></script>
-  <script src="shot-classifier.js"></script>
-  <script src="game-layer.js"></script>
+  <script src="wagon-wheel.js?v=20261126-sampcnt"></script>
+  <script src="shot-classifier.js?v=20261126-sampcnt"></script>
+  <script src="game-layer.js?v=20261126-sampcnt"></script>
   <script src="shot-report.js"></script>
   <script src="shot-history.js"></script>
-  <script src="shot-practice.js"></script>
+  <script src="shot-practice.js?v=20261126-imu-reset-order"></script>
   <script src="quaternion-packet-gate.js"></script>
   <script src="shot-guard.js"></script>
-  <script src="device-shot-control.js"></script>
+  <script src="device-shot-control.js?v=20261126-imu-reset"></script>
   <script src="ble-command-queue.js"></script>
-  <script src="stream-recovery.js"></script>
-  <script src="device-config.js"></script>
-  <script src="stance-calibration.js"></script>
-  <script src="ble-session-setup.js"></script>
+  <script src="stream-recovery.js?v=20261126-post-readback-calibration"></script>
+  <script src="device-config.js?v=20261126-sampcnt"></script>
+  <script src="stance-calibration.js?v=20261126-windowed-stability"></script>
+  <script src="ble-session-setup.js?v=20261126-sampcnt"></script>
   <script>
     // ── BLE UUIDs (per vc.md spec) ──────────────────────────────────
     const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
@@ -639,11 +656,15 @@
     const btnReset = document.getElementById('btn-reset');
     const btnClear = document.getElementById('btn-clear');
     const btnAirMouse = document.getElementById('btn-air-mouse');
+    const btnTakeOrientation = document.getElementById('btn-take-orientation');
     const btnTakeStance = document.getElementById('btn-take-stance');
     const stanceDialog = document.getElementById('stance-dialog');
+    const stanceTitle = document.getElementById('stance-title');
     const stanceInstruction = document.getElementById('stance-instruction');
     const stanceProgress = document.getElementById('stance-progress');
     const stanceCancel = document.getElementById('stance-cancel');
+    let calibrationRequestId = 0;
+    let calibrationRequestPending = false;
     const trackCanvas = document.getElementById('track-canvas');
     const trackCtx = trackCanvas.getContext('2d');
     const trackHint = document.getElementById('track-hint');
@@ -655,6 +676,7 @@
     const mouseMessage = document.getElementById('mouse-message');
     const captureReadout = document.getElementById('capture-readout');
     const captureInstruction = document.getElementById('capture-instruction');
+    const orientationReferenceLabel = document.getElementById('orientation-reference');
     const stanceReferenceLabel = document.getElementById('stance-reference');
     let mouseActive = false;
     let mouseStarting = false;
@@ -707,8 +729,13 @@
       bowled_prob: document.getElementById('game-bowled-prob'),
       edge_base_prob: document.getElementById('game-edge-prob'),
       capture_window_ms: document.getElementById('game-capture-window-ms'),
+      sampcnt: document.getElementById('game-sampcnt'),
     };
     const GAME_CONFIG_STORAGE_KEY = 'powerplai.game_config';
+
+    function sampleRateHzFor(sampcnt) {
+      return DeviceConfig.sampcntToHz(sampcnt);
+    }
 
     function loadGameConfig() {
       try {
@@ -728,14 +755,17 @@
       decodeState: DeviceConfig.decode,
       configMatches: DeviceConfig.matches,
       createStabilityTracker: StanceCalibration.createStabilityTracker,
+      getSampleSequence: () => packetGate.sequence,
+      waitForFreshSample: (afterSequence, isCurrent) =>
+        streamRecovery.ensureFreshPacket(performance.now(), 1500, afterSequence, isCurrent),
     });
 
     async function syncGameConfig() {
       if (!connected) {
-        setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; its sensor stream remains at 50 Hz.', 'pending');
+        setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; the BLE sampling cadence is read back before START.', 'pending');
         return false;
       }
-      setGameConfigStatus(`Sending ${gameConfig.capture_window_ms} ms capture setting to the ESP32…`, 'pending');
+      setGameConfigStatus(`Sending ${gameConfig.capture_window_ms} ms capture setting and ${sampleRateHzFor(gameConfig.sampcnt)} Hz cadence to the ESP32…`, 'pending');
       shotGuardReference = null;
       updateStanceReference();
       updateAirMouseUI();
@@ -747,11 +777,18 @@
         updateStanceReference();
         updateAirMouseUI();
         updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
-        const acknowledged = result.state;
+        const cadence = await sessionSetup.syncSampcnt([1, 2, 3, 4].includes(gameConfig.sampcnt) ? gameConfig.sampcnt : 1);
+        if (!cadence) return false;
+        shotGuardReference = cadence.stanceReference;
+        updateStanceReference();
+        updateAirMouseUI();
+        updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+        const acknowledged = cadence.state;
         const acknowledgedDifficulty = acknowledged.difficulty.replace('_', ' ')
           .replace(/\b\w/g, letter => letter.toUpperCase());
-        const expectedSamples = Math.round(acknowledged.capture_window_ms * 50 / 1000);
-        setGameConfigStatus(`ESP32 ACK ✓ · ${acknowledgedDifficulty} · bowled ${acknowledged.bowled_prob}/100 · edge ${acknowledged.edge_base_prob}/100 · ${acknowledged.capture_window_ms} ms. Browser uses this window; BLE stays at 50 Hz (~${expectedSamples} samples).`, 'acknowledged');
+        const hz = Math.round(sampleRateHzFor(acknowledged.sampcnt));
+        const expectedSamples = Math.round(acknowledged.capture_window_ms * hz / 1000);
+        setGameConfigStatus(`ESP32 ACK ✓ · ${acknowledgedDifficulty} · bowled ${acknowledged.bowled_prob}/100 · edge ${acknowledged.edge_base_prob}/100 · ${acknowledged.capture_window_ms} ms · ${hz} Hz cadence verified. Browser uses this window; BLE sends at ${hz} Hz (~${expectedSamples} samples).`, 'acknowledged');
         setMouseMessage(shotGuardReference
           ? 'Game settings confirmed. Your session stance is still active.'
           : 'Game settings confirmed. Take your stance for 3 seconds before starting.', 'success');
@@ -770,7 +807,7 @@
       for (const [key, control] of Object.entries(gameConfigControls)) control.value = String(gameConfig[key]);
       const difficultyName = gameConfig.difficulty.replace('_', ' ')
         .replace(/\b\w/g, letter => letter.toUpperCase());
-      gameConfigSummary.textContent = `Game config · ${difficultyName} · ${gameConfig.capture_window_ms} ms`;
+      gameConfigSummary.textContent = `Game config · ${difficultyName} · ${gameConfig.capture_window_ms} ms · ${Math.round(sampleRateHzFor(gameConfig.sampcnt))} Hz`;
     }
 
     function setGameConfigStatus(message, state) {
@@ -779,14 +816,26 @@
     }
 
     function updateStanceReference() {
+      if (sessionSetup.orientationReference) {
+        orientationReferenceLabel.textContent = 'Bat orientation: Set · straight-down-pitch 0° reference saved. This is stored separately; shot direction is currently measured from the batting stance.';
+        orientationReferenceLabel.dataset.state = 'set';
+      } else if (connected && sessionSetup.configReady) {
+        orientationReferenceLabel.textContent = 'Bat orientation not set. Align the bat with the straight-down-pitch 0° reference and hold it still for 3 seconds.';
+        orientationReferenceLabel.dataset.state = 'unset';
+      } else {
+        orientationReferenceLabel.textContent = 'Bat orientation not set. Connect and align the bat with the straight-down-pitch 0° reference.';
+        orientationReferenceLabel.dataset.state = 'unset';
+      }
       if (shotGuardReference) {
-        stanceReferenceLabel.textContent = 'Saved stance direction: Straight · 0° session baseline. Shot directions are relative to this pose; this is not a compass heading.';
+        stanceReferenceLabel.textContent = 'Batting stance: Set · Straight · 0° session-relative baseline. Shot directions are measured from this pose; this is not a compass heading.';
         stanceReferenceLabel.dataset.state = 'set';
       } else if (connected && sessionSetup.configReady) {
-        stanceReferenceLabel.textContent = 'Stance not set. Take stance to establish Straight · 0° as this session’s reference; shot directions will be relative to it.';
+        stanceReferenceLabel.textContent = sessionSetup.orientationReference
+          ? 'Stance not set. Hold the normal batting pose steady for 3 seconds; shot directions will be relative to it.'
+          : 'Stance not set. Set bat orientation first, then capture the normal batting pose for 3 seconds.';
         stanceReferenceLabel.dataset.state = 'unset';
       } else {
-        stanceReferenceLabel.textContent = 'Stance reference not set. Connect and take stance; the saved pose becomes Straight · 0° for this session.';
+        stanceReferenceLabel.textContent = 'Stance not set. Connect, set bat orientation, then capture the batting pose; it becomes Straight · 0° for this session.';
         stanceReferenceLabel.dataset.state = 'unset';
       }
     }
@@ -799,11 +848,12 @@
         bowled_prob: Number(gameConfigControls.bowled_prob.value),
         edge_base_prob: Number(gameConfigControls.edge_base_prob.value),
         capture_window_ms: Number(gameConfigControls.capture_window_ms.value),
+        sampcnt: Number(gameConfigControls.sampcnt.value),
       });
       renderGameConfig();
       try { window.localStorage.setItem(GAME_CONFIG_STORAGE_KEY, JSON.stringify(gameConfig)); } catch (_) { /* storage may be disabled */ }
       if (shotCycle) shotCycle.setCaptureMs(gameConfig.capture_window_ms);
-      if (!connected) setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; its sensor stream remains at 50 Hz.', 'pending');
+      if (!connected) setGameConfigStatus('Settings saved in this browser. They will be sent to the ESP32 after connecting; the BLE sampling cadence is read back before START.', 'pending');
       void syncGameConfig();
     }
     for (const control of Object.values(gameConfigControls)) control.addEventListener('change', updateGameConfig);
@@ -835,7 +885,10 @@
         : mouseActive ? 'LIVE · Move the bat'
           : mouseStarting ? 'Waiting for the bat…' : connected ? 'Ready when you are' : 'Ready when connected';
       btnDisconnect.disabled = !connected;
-      btnTakeStance.disabled = !connected || !sessionSetup.configReady || mouseStarting || shotBusy || sessionSetup.isCalibrating;
+      const setupLocked = !connected || !sessionSetup.configReady || mouseStarting || shotBusy || sessionSetup.isCalibrating || calibrationRequestPending;
+      btnTakeOrientation.disabled = setupLocked;
+      btnTakeOrientation.textContent = sessionSetup.orientationReference ? 'Re-set Bat Orientation · 3 s' : 'Set Bat Orientation · 3 s';
+      btnTakeStance.disabled = setupLocked || !sessionSetup.orientationReference;
       btnTakeStance.textContent = shotGuardReference ? 'Re-take Stance · 3 s' : 'Take Stance · 3 s';
       const guardControlsLocked = !connected || mouseStarting || shotBusy || Boolean(shotGuardReference);
       btnGuard.disabled = guardControlsLocked;
@@ -845,12 +898,15 @@
     }
 
     function updateShotPracticeUI(state, detail = {}) {
-      const busy = ['preparing', 'countdown', 'capturing', 'analyzing'].includes(state);
+      const busy = ['preparing', 'resetting', 'stream-preparing', 'countdown', 'reset-failed', 'capturing', 'analyzing'].includes(state);
       for (const control of Object.values(gameConfigControls)) control.disabled = busy;
       captureReadout.dataset.state = state;
       if (state === 'preparing') {
-        captureReadout.textContent = 'Preparing…';
-        captureInstruction.textContent = 'Checking the live sensor stream.';
+        captureReadout.textContent = 'Preparing IMU…';
+        captureInstruction.textContent = 'Acknowledging START before requesting the per-shot IMU reset.';
+      } else if (state === 'stream-preparing') {
+        captureReadout.textContent = 'Preparing IMU…';
+        captureInstruction.textContent = 'Reset complete · waiting for a fresh quaternion sample before countdown.';
       } else if (state === 'countdown') {
         captureReadout.textContent = String(detail.remaining || 1);
         captureInstruction.textContent = shotGuardReference
@@ -859,12 +915,20 @@
       } else if (state === 'capturing') {
         captureReadout.textContent = 'GO';
         const captureMs = detail.captureMs || gameConfig.capture_window_ms;
-        captureInstruction.textContent = `Swing now · browser captures for ${captureMs} ms · about ${Math.round(captureMs / 20)} samples from the 50 Hz BLE stream`;
+        const hz = Math.round(sampleRateHzFor(gameConfig.sampcnt));
+        captureInstruction.textContent = `Swing now · browser captures for ${captureMs} ms · about ${Math.round(captureMs * hz / 1000)} samples from the ${hz} Hz BLE stream`;
+      } else if (state === 'resetting') {
+        captureReadout.textContent = 'Preparing IMU…';
+        captureInstruction.textContent = 'Reset requested · waiting for the ESP32 to confirm completion before countdown.';
       } else if (state === 'analyzing') {
         captureReadout.textContent = 'Analyzing…';
         const captureMs = detail.captureMs || gameConfig.capture_window_ms;
-        const expectedSamples = Math.round(captureMs * 50 / 1000);
-        captureInstruction.textContent = `${detail.sampleCount || 0} samples received · ${detail.sampleSpanMs ?? 0} ms observed timestamp span inside ${captureMs} ms · ~${expectedSamples} expected at 50 Hz`;
+        const hz = Math.round(sampleRateHzFor(detail.context?.sampcnt ?? gameConfig.sampcnt));
+        const expectedSamples = Math.round(captureMs * hz / 1000);
+        captureInstruction.textContent = `${detail.sampleCount || 0} samples received · ${detail.sampleSpanMs ?? 0} ms observed timestamp span inside ${captureMs} ms · ~${expectedSamples} expected at ${hz} Hz`;
+      } else if (state === 'reset-failed') {
+        captureReadout.textContent = 'IMU reset failed';
+        captureInstruction.textContent = `${detail.message || 'The ESP32 did not confirm the per-shot reset.'} Disconnect and reconnect before trying another shot.`;
       } else if (state === 'error') {
         captureReadout.textContent = 'Needs attention';
         captureInstruction.textContent = detail.message || 'Capture failed. Check the BLE connection and try again.';
@@ -887,7 +951,10 @@
       btnRecenter.disabled = guardControlsLocked;
       btnReset.disabled = guardControlsLocked;
       btnClear.disabled = guardControlsLocked;
-      btnTakeStance.disabled = !connected || !sessionSetup.configReady || mouseStarting || busy || sessionSetup.isCalibrating;
+      const setupLocked = !connected || !sessionSetup.configReady || mouseStarting || busy || sessionSetup.isCalibrating || calibrationRequestPending;
+      btnTakeOrientation.disabled = setupLocked;
+      btnTakeOrientation.textContent = sessionSetup.orientationReference ? 'Re-set Bat Orientation · 3 s' : 'Set Bat Orientation · 3 s';
+      btnTakeStance.disabled = setupLocked || !sessionSetup.orientationReference;
       btnTakeStance.textContent = shotGuardReference ? 'Re-take Stance · 3 s' : 'Take Stance · 3 s';
     }
 
@@ -954,6 +1021,8 @@
     }
 
     function stopAirMouseForDisconnect() {
+      calibrationRequestId++;
+      calibrationRequestPending = false;
       mouseActive = false;
       mouseStarting = false;
       mouseTracker = null;
@@ -1017,76 +1086,116 @@
       if (!sessionSetup.isReady() || mouseStarting) return false;
       if (mouseActive) stopAirMouse();
       const stale = !lastPacketTime || performance.now() - lastPacketTime > 1500;
+      const beforeStart = packetGate.sequence;
       if (!streamEnabled || stale) {
-        const beforeStart = packetGate.sequence;
         if (!await sendCommand(0x05)) return false;
         streamEnabled = true;
         packetHistory = [];
         packetRate = 0;
         updateStreamButton();
-        if (!await packetGate.waitFor(1, 2500, beforeStart)) return false;
       }
+      if (!await packetGate.waitFor(1, 2500, beforeStart)) return false;
       shotTracker = null;
-      mouseStatus.textContent = 'Set your stance';
+      mouseStatus.textContent = 'IMU ready · hold your saved stance through countdown';
       drawTrack();
       return connected;
     }
 
-    async function takeStance() {
-      if (!connected || !sessionSetup.configReady || sessionSetup.isCalibrating) return;
-      stanceInstruction.textContent = 'Stand in your batting stance with the display facing you. Hold the bat still for 3 seconds.';
-      stanceProgress.textContent = 'Clearing the previous stance…';
+    async function runSetupCalibration(kind) {
+      if (!connected || !sessionSetup.configReady || sessionSetup.isCalibrating || calibrationRequestPending ||
+          (kind === 'stance' && !sessionSetup.orientationReference)) return;
+      const requestId = ++calibrationRequestId;
+      calibrationRequestPending = true;
+      const isOrientation = kind === 'orientation';
+      stanceTitle.textContent = isOrientation ? 'Set bat orientation' : 'Take your batting stance';
+      stanceInstruction.textContent = isOrientation
+        ? 'Place the bat in its straight-down-pitch 0° reference position, display facing you, and hold it still for 3 seconds.'
+        : 'Stand in your normal batting stance with the display facing you. Hold the bat still for 3 seconds.';
+      stanceProgress.textContent = 'Waiting for sensor data…';
       stanceCancel.textContent = 'Cancel';
+      if (isOrientation) shotGuardReference = null;
       stanceDialog.showModal();
+      updateStanceReference();
       updateAirMouseUI();
       try {
-        const reference = await sessionSetup.calibrateStance(progress => {
+        const packetReady = await streamRecovery.ensureFreshPacket(performance.now(), 1500);
+        if (requestId !== calibrationRequestId || !stanceDialog.open) return;
+        if (!packetReady) throw new Error('No quaternion data arrived from the ESP32. Check the BLE sensor stream and try again.');
+
+        const onProgress = progress => {
           if (progress.moved) {
             stanceInstruction.textContent = progress.valid
               ? 'Movement detected. Hold still; the three-second stability timer has restarted.'
               : 'Sensor samples paused. Hold still while the live stream recovers.';
           } else {
-            stanceInstruction.textContent = 'Stand in your batting stance with the display facing you. Keep the bat still.';
+            stanceInstruction.textContent = isOrientation
+              ? 'Keep the bat in the straight-down-pitch 0° reference position and hold it still.'
+              : 'Stand in your normal batting stance with the display facing you. Keep the bat still.';
           }
-          stanceProgress.textContent = progress.stable ? 'Guard set · verifying with ESP32…'
+          stanceProgress.textContent = progress.stable
+            ? (isOrientation ? 'Orientation stable · saving reference…' : 'Stance stable · verifying with ESP32…')
             : `Hold still · ${(progress.remainingMs / 1000).toFixed(1)} s`;
-        });
+        };
+        const reference = isOrientation
+          ? await sessionSetup.calibrateOrientation(onProgress)
+          : await sessionSetup.calibrateStance(onProgress);
         if (!reference) return;
-        shotGuardReference = reference;
-        stanceInstruction.textContent = 'Saved stance direction: Straight · 0° session-relative baseline. Shot directions are measured from this pose; this is not a compass heading. Return to this stance between shots.';
-        stanceProgress.textContent = 'Guard set ✓ · Straight · 0°';
+        if (isOrientation) {
+          stanceInstruction.textContent = 'Bat orientation reference saved. It is retained separately; the batting stance remains the direction baseline.';
+          stanceProgress.textContent = 'Orientation set ✓ · 0° reference';
+        } else {
+          shotGuardReference = reference;
+          stanceInstruction.textContent = 'Saved stance direction: Straight · 0° session-relative baseline. Shot directions are measured from this pose; this is not a compass heading. Return to this stance between shots.';
+          stanceProgress.textContent = 'Stance set ✓ · Straight · 0°';
+        }
         stanceCancel.textContent = 'Done';
-        setMouseMessage('Stance set and verified by the ESP32. Web and bat START are ready.', 'success');
+        setMouseMessage(isOrientation
+          ? 'Bat orientation saved. Now capture the normal batting stance for this session.'
+          : 'Stance set and verified by the ESP32. Web and bat START are ready.', 'success');
       } catch (error) {
+        if (requestId !== calibrationRequestId) return;
         stanceInstruction.textContent = error.message || 'Stance setup failed. Check the BLE connection and try again.';
         stanceProgress.textContent = 'Needs attention';
         stanceCancel.textContent = 'Close';
         setMouseMessage(error.message || 'Stance setup failed.', 'error');
       } finally {
-        updateAirMouseUI();
-        updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+        if (requestId === calibrationRequestId) {
+          calibrationRequestPending = false;
+          updateAirMouseUI();
+          updateShotPracticeUI(shotCycle ? shotCycle.state : 'ready');
+        }
       }
     }
 
-    async function cancelStanceDialog() {
+    async function cancelSetupDialog() {
+      calibrationRequestId++;
+      calibrationRequestPending = false;
       const wasCalibrating = sessionSetup.isCalibrating;
-      if (wasCalibrating) await sessionSetup.cancelStance(true);
       if (wasCalibrating) {
-        shotGuardReference = null;
-        setMouseMessage('Stance setup cancelled. Take stance again before starting.', 'info');
+        const kind = sessionSetup.calibrationKind;
+        try {
+          await sessionSetup.cancelSetupCalibration(true);
+          shotGuardReference = null;
+          setMouseMessage(kind === 'orientation'
+            ? 'Bat orientation capture cancelled. Set orientation before taking stance.'
+            : 'Stance setup cancelled. Take stance again before starting.', 'info');
+        } catch (error) {
+          setMouseMessage(error.message || 'Could not cancel calibration cleanly.', 'error');
+        }
       }
       if (stanceDialog.open) stanceDialog.close();
       updateAirMouseUI();
     }
 
-    btnTakeStance.addEventListener('click', () => { void takeStance(); });
+    btnTakeOrientation.addEventListener('click', () => { void runSetupCalibration('orientation'); });
+    btnTakeStance.addEventListener('click', () => { void runSetupCalibration('stance'); });
     stanceCancel.addEventListener('click', () => {
-      if (sessionSetup.isCalibrating) void cancelStanceDialog();
+      if (sessionSetup.isCalibrating) void cancelSetupDialog();
       else if (stanceDialog.open) stanceDialog.close();
     });
     stanceDialog.addEventListener('cancel', event => {
       event.preventDefault();
-      void cancelStanceDialog();
+      void cancelSetupDialog();
     });
 
     function renderShotState(state, detail) {
@@ -1122,6 +1231,7 @@
       onPrepare: prepareShotCapture,
       analyze: samples => ShotClassifier.analyzeShot(samples, {
         ...params,
+        sampleRateHz: sampleRateHzFor(gameConfig.sampcnt),
         referenceQuaternion: shotGuardReference,
         battingHand: activeShotBattingHand,
       }),
@@ -1136,6 +1246,7 @@
         dbgSwing.textContent = `${new Date().toLocaleTimeString()} · classifier ${result.shotType || 'unclear'} · ${peakRadS}`;
       },
       onState: renderShotState,
+      onReset: () => deviceShotControl.resetSensor(),
     });
     shotCycle.lastResult = null;
     deviceShotControl = DeviceShotControl.create({
@@ -1143,7 +1254,16 @@
       isReady: () => sessionSetup.isReady(),
       getState: () => shotCycle.state,
       sendCommand,
-      startCycle: async () => {
+      readState: async () => {
+        const bytes = await commandWriter.readState();
+        return bytes ? DeviceConfig.decode(bytes) : null;
+      },
+      verifyReady: state => state.shotState === 'ready',
+      onResetEvent: (event, detail) => {
+        const failed = ['unavailable', 'write-failed', 'read-failed', 'failed', 'timeout', 'disconnected'].includes(event);
+        (failed ? console.warn : console.info)(`[IMU reset] ${event}`, detail?.error || detail || '');
+      },
+      startCycle: async acknowledgeStart => {
         if (!sessionSetup.isReady()) return false;
         shotCycle.lastResult = null;
         activeShotBattingHand = battingHand;
@@ -1151,7 +1271,7 @@
         shotCard.style.display = 'none';
         mouseStatus.textContent = 'Preparing next shot…';
         drawTrack();
-        return shotCycle.start();
+        return shotCycle.start(acknowledgeStart);
       },
     });
 
@@ -1176,13 +1296,13 @@
       await notifyChar.startNotifications();
 
       connected = true;
-      setStatus('Connected · starting sensor stream and confirming game settings…', '');
-      if (!await sendCommand(0x05)) throw new Error('Could not start the BLE sensor stream.');
       streamEnabled = true;
-      streamRecoveryPending = false;
       lastPacketTime = 0;
       packetHistory = [];
       packetRate = 0;
+      setStatus('Connected · starting sensor stream and confirming game settings…', '');
+      if (!await sendCommand(0x05)) throw new Error('Could not start the BLE sensor stream.');
+      streamRecoveryPending = false;
       reconnectAttempt = 0;
       btnConnect.textContent = 'Connected';
       btnConnect.disabled = true;
@@ -1306,6 +1426,7 @@
       // can publish a ready state, which must not write to a dying GATT link.
       connected = false;
       streamEnabled = false;
+      streamRecovery.reset();
       notifyChar = null;
       cmdChar = null;
       stateChar = null;
@@ -1374,7 +1495,7 @@
       q.z /= norm;
 
       const now = performance.now();
-      sessionSetup.observeStanceSample(q, now);
+      sessionSetup.observeCalibrationSample(q, now);
       if (deviceShotControl) {
         if (deviceStartRequested) void deviceShotControl.requestDeviceStart();
         else deviceShotControl.releaseDeviceStart();
@@ -1447,7 +1568,7 @@
       }
 
       // Keep every completed shot in this page session; newest appears first.
-      const count = shotHistory.append(r, new Date(), samples, geometry, gameOutcome, captureDetail);
+      const count = shotHistory.append(r, new Date(), samples, geometry, gameOutcome, captureDetail, shotGuardReference, sessionSetup.orientationReference);
       historyTitle.textContent = `Shot history (${count})`;
       historyDownload.disabled = count === 0;
       historyClear.disabled = count === 0;
@@ -1543,3 +1664,4 @@
   </script>
 </body>
 </html>
+

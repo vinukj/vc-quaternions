@@ -9,9 +9,11 @@
     bowled_prob: 3,
     edge_base_prob: 10,
     capture_window_ms: 525,
+    sampcnt: 1,
   });
   const DIFFICULTIES = Object.freeze(['dry_pitch', 'green_pitch', 'flat_pitch']);
   const CAPTURE_WINDOWS = Object.freeze([400, 500, 525, 600, 700, 800, 900]);
+  const SAMPCNT = Object.freeze([1, 2, 3, 4]);
   const DIFFICULTY = Object.freeze({
     dry_pitch: { distance: 0.88, goodTiming: 0.56 },
     green_pitch: { distance: 0.78, goodTiming: 0.46 },
@@ -29,6 +31,7 @@
     }
     config.edge_base_prob = Math.min(config.edge_base_prob, 100 - config.bowled_prob);
     if (CAPTURE_WINDOWS.includes(value.capture_window_ms)) config.capture_window_ms = value.capture_window_ms;
+    if (SAMPCNT.includes(value.sampcnt)) config.sampcnt = value.sampcnt;
     return config;
   }
 
@@ -123,5 +126,5 @@
     };
   }
 
-  return { DEFAULT_CONFIG, DIFFICULTIES, CAPTURE_WINDOWS, normalizeConfig, createOutcome };
+  return { DEFAULT_CONFIG, DIFFICULTIES, CAPTURE_WINDOWS, SAMPCNT, normalizeConfig, createOutcome };
 });

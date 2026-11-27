@@ -5,7 +5,8 @@
  *   1. Read QMI8658 at 200 Hz (fixed 5 ms intervals).
  *   2. Feed accel/gyro into Madgwick (6-axis, beta=0.1) -> quaternion.
  *   3. Detect bat swings on-device (gyro mag > 300 dps) and set flag bit0.
- *   4. Stream quaternion over BLE notify at 50 Hz (every 4th sample).
+ *   4. Stream quaternion over BLE notify at the selected cadence
+ *      (default every 4th sample = 50 Hz; 0x0B selects 4/3/2/1).
  *   5. Optional: light sleep between packets for power saving.
  *
  * Thread sharing: s_current_q / s_current_q_valid are written by this task
@@ -57,6 +58,9 @@ bool imu_bluetooth_is_ready(void);
 
 /** Ask the IMU task to reinitialize its filter on the next iteration. */
 void imu_bluetooth_request_filter_reset(void);
+
+/** Queue a QMI8658-only reset; BLE, the stance reference and filter frame stay active. */
+void imu_bluetooth_request_sensor_reset(void);
 
 #ifdef __cplusplus
 }

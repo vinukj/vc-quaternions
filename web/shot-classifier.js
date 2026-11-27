@@ -10,10 +10,13 @@
   else root.ShotClassifier = api;
 })(typeof globalThis === 'undefined' ? this : globalThis, function (BatScreenFrame) {
   const RAD_TO_DEG = 180 / Math.PI;
-  // A 400 ms window at 50 Hz yields roughly 20 packets; shorter spans are
+  // A 400 ms window yields roughly 20 packets at 50 Hz; shorter spans are
   // still rejected to avoid classifying only a few noisy orientation steps.
   const MIN_CAPTURE_MS = 350;
-  const MAX_SAMPLE_GAP_MS = 220;
+  const DEFAULT_SAMPLE_RATE_HZ = 50;
+  // A gap of ~11 sample intervals (220 ms at 50 Hz) marks a dropped-packet
+  // break; it scales with the configured BLE cadence.
+  const MAX_GAP_INTERVALS = 11;
   const MAX_BURST_GAP_INTERVALS = 2;
   const LATER_LOBE_DISTANCE_RATIO = 1.25;
 
@@ -38,7 +41,9 @@
   }
 
   function relativeQuat(a, b) {
-    let delta = normalize(multiply(conjugate(a), b));
+    // Match DirectionTracker: this increment is in the captured stance frame,
+    // so its projected axis does not rotate with the bat during a swing.
+    let delta = normalize(multiply(b, conjugate(a)));
     if (!delta) return null;
     // q and -q encode the same pose. Pick the shortest signed rotation.
     if (delta.w < 0) delta = { w: -delta.w, x: -delta.x, y: -delta.y, z: -delta.z };
@@ -73,7 +78,7 @@
     return labels[Math.round(angle / (Math.PI / 4) + 8) % 8];
   }
 
-  function emptyResult(sampleCount = 0) {
+  function emptyResult(sampleCount = 0, sampleRateHz = DEFAULT_SAMPLE_RATE_HZ) {
     return {
       status: 'insufficient-data',
       direction: 'No clear movement',
@@ -83,6 +88,7 @@
       classificationBasis: 'heuristic',
       swingDetected: false,
       sampleCount,
+      sampleRateHz,
       capturedMs: 0,
       rotationDegrees: 0,
       netRotationDegrees: 0,
@@ -127,6 +133,10 @@
   }
 
   function analyzeShot(inputSamples, params = {}) {
+    const sampleRateHz = Number.isFinite(params.sampleRateHz) && params.sampleRateHz > 0
+      ? params.sampleRateHz : DEFAULT_SAMPLE_RATE_HZ;
+    const sampleIntervalMs = 1000 / sampleRateHz;
+    const maxSampleGapMs = sampleIntervalMs * MAX_GAP_INTERVALS;
     const guard = normalize(params.referenceQuaternion) || { w: 1, x: 0, y: 0, z: 0 };
     const samples = (Array.isArray(inputSamples) ? inputSamples : [])
       .map(sample => {
@@ -143,7 +153,7 @@
     // cannot establish a reliable motion path, speed, or direction.
     const capturedMs = samples.length > 1 ? samples.at(-1).t - samples[0].t : 0;
     if (samples.length < 3 || capturedMs < MIN_CAPTURE_MS) {
-      const result = emptyResult(samples.length);
+      const result = emptyResult(samples.length, sampleRateHz);
       result.capturedMs = Math.max(0, capturedMs);
       if (samples.length >= 2) {
         const endpointDelta = screenDelta(samples[0], samples.at(-1));
@@ -163,29 +173,34 @@
       const b = samples[index];
       const dtMs = b.t - a.t;
       if (!(dtMs > 0)) continue;
-      // Interpret angular increments in the bat-mounted sensor frame. A
-      // world-frame delta rotates its apparent axis as the bat turns, which
-      // can make a straight sensor-axis swing appear to curve toward behind.
+      // BLE notifications can arrive in bursts, so use the configured cadence
+      // for velocity/path weighting. Keep callback timestamps for capture span
+      // and for detecting actual long gaps.
       const delta = relativeQuat(a, b);
       if (!delta) continue;
       const rotation = rotationOf(delta);
-      const dt = dtMs / 1000;
       observedDeltas.push(rotation);
       // Keep every observed orientation change in the whole-shot rotation,
       // but only trust short intervals for instantaneous speed and direction.
-      if (dtMs > MAX_SAMPLE_GAP_MS) continue;
+      if (dtMs > maxSampleGapMs) continue;
+      const dt = sampleIntervalMs / 1000;
       const velocity = rotation.angle / dt;
       const previousDelta = deltas.at(-1);
+      const axialRoll = BatScreenFrame.isAxialRoll({
+        x: rotation.axis.x * rotation.angle,
+        y: rotation.axis.y * rotation.angle,
+        z: rotation.axis.z * rotation.angle,
+      }, b);
       deltas.push({
         ...rotation,
         dt,
         velocity,
         startMs: a.t,
         endMs: b.t,
-        continuousFromPrevious: !previousDelta || a.t - previousDelta.endMs <= MAX_SAMPLE_GAP_MS,
+        continuousFromPrevious: !previousDelta || a.t - previousDelta.endMs <= maxSampleGapMs,
         // Axial X roll contributes to swing magnitude but not map heading.
-        // Use the same LCD-facing transform as the live pointer.
-        screenVelocity: BatScreenFrame.rotationToScreen({
+        // Use the same current-bat-axis rejection as the live pointer.
+        screenVelocity: axialRoll ? { x: 0, y: 0 } : BatScreenFrame.rotationToScreen({
           x: rotation.axis.x * velocity,
           y: rotation.axis.y * velocity,
           z: rotation.axis.z * velocity,
@@ -423,6 +438,7 @@
       directionConsistency,
       swingDetected,
       sampleCount: samples.length,
+      sampleRateHz,
       capturedMs,
       rotationDegrees: totalRotation * RAD_TO_DEG,
       netRotationDegrees: startToEnd.angle * RAD_TO_DEG,

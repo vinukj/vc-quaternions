@@ -26,3 +26,4 @@ test('a timed-out packet wait is cancelled and disconnect resolves pending waits
   gate.cancelWaiters();
   assert.equal(await pending, false);
 });
+

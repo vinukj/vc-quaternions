@@ -6,14 +6,21 @@
 })(typeof globalThis === 'undefined' ? this : globalThis, function () {
   const COMMAND_SHOT_BUSY = 0x08;
   const COMMAND_SHOT_READY = 0x09;
+  const COMMAND_SENSOR_RESET = 0x0a;
 
   function create(options = {}) {
     const isConnected = options.isConnected || (() => false);
     const isReady = options.isReady || (() => true);
     const getState = options.getState || (() => 'ready');
     const sendCommand = options.sendCommand || (async () => false);
-    const startCycle = options.startCycle || (async () => false);
+    const readState = options.readState;
+    const onResetEvent = options.onResetEvent || (() => {});
+    const verifyReady = options.verifyReady;
+    const wait = options.wait || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
     const now = options.now || (() => performance.now());
+    const resetTimeoutMs = Number.isFinite(options.resetTimeoutMs) ? options.resetTimeoutMs : 1500;
+    const resetPollMs = Number.isFinite(options.resetPollMs) ? options.resetPollMs : 50;
+    const startCycle = options.startCycle || (async () => false);
     const retryMs = Number.isFinite(options.retryMs) ? options.retryMs : 300;
     let inFlight = false;
     let busyAckPending = false;
@@ -37,6 +44,10 @@
       }
     }
 
+    async function acknowledgeStart() {
+      return retryBusyAck();
+    }
+
     return {
       async requestStart() {
         if (!isConnected() || !isReady()) return false;
@@ -48,19 +59,17 @@
           return false;
         }
         inFlight = true;
+        busyAckPending = true;
+        lastBusyAckAttempt = -Infinity;
         try {
-          // The LCD touch is the shot cue. Start the browser cycle at once so
-          // its 3-2-1 is not delayed behind a BLE write acknowledgement.
-          const started = await Promise.resolve().then(startCycle);
-          if (!started) return false;
-          // A failed LCD acknowledgement must not suppress the browser timer.
-          // Firmware repeats the touch request until this write succeeds.
-          busyAckPending = true;
-          // Retry throttling applies within one held request only. A fresh
-          // START after READY is a new cycle and needs its own immediate ACK.
-          lastBusyAckAttempt = -Infinity;
-          void retryBusyAck();
-          return true;
+          // startCycle renders Preparing IMU first, then calls this to obtain
+          // the firmware's 0x08 acknowledgement before requesting reset.
+          const started = await Promise.resolve().then(() => startCycle(acknowledgeStart));
+          if (!started) busyAckPending = false;
+          return Boolean(started);
+        } catch (error) {
+          busyAckPending = false;
+          throw error;
         } finally {
           inFlight = false;
         }
@@ -87,11 +96,56 @@
       async markReady() {
         if (!isConnected()) return false;
         busyAckPending = false;
-        return sendCommand(COMMAND_SHOT_READY);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (await sendCommand(COMMAND_SHOT_READY) &&
+              (!readState || !verifyReady || verifyReady(await readState()))) return true;
+        }
+        return false;
+      },
+      acknowledgeStart,
+      async resetSensor() {
+        if (!isConnected() || !readState) {
+          onResetEvent('unavailable');
+          return false;
+        }
+        onResetEvent('requesting', { command: COMMAND_SENSOR_RESET });
+        let sent;
+        try {
+          sent = await sendCommand(COMMAND_SENSOR_RESET);
+        } catch (error) {
+          onResetEvent('write-failed', { error });
+          throw error;
+        }
+        if (!sent) {
+          onResetEvent('write-failed');
+          return false;
+        }
+        onResetEvent('sent');
+        const deadline = now() + resetTimeoutMs;
+        while (isConnected() && now() <= deadline) {
+          let state;
+          try {
+            state = await readState();
+          } catch (error) {
+            onResetEvent('read-failed', { error });
+            throw error;
+          }
+          if (state?.imuResetStatus === 'complete') {
+            onResetEvent('complete');
+            return true;
+          }
+          if (state?.imuResetStatus === 'failed') {
+            onResetEvent('failed');
+            return false;
+          }
+          await wait(resetPollMs);
+        }
+        onResetEvent(isConnected() ? 'timeout' : 'disconnected');
+        return false;
       },
       get inFlight() { return inFlight; },
     };
   }
 
-  return { create, COMMAND_SHOT_BUSY, COMMAND_SHOT_READY };
+  return { create, COMMAND_SHOT_BUSY, COMMAND_SHOT_READY, COMMAND_SENSOR_RESET };
 });

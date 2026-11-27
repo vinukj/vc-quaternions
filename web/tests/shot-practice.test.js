@@ -14,6 +14,7 @@ function fakeClock() {
       return id;
     },
     clearTimeout(id) { timers.delete(id); },
+    get delays() { return [...timers.values()].map(timer => timer.at - now); },
     async advance(milliseconds) {
       const target = now + milliseconds;
       while (true) {
@@ -32,6 +33,94 @@ function fakeClock() {
     elapseWithoutRunningTimers(milliseconds) { now += milliseconds; },
   };
 }
+
+async function settleStart(cycle, acknowledgeStart) {
+  const accepted = await cycle.start(acknowledgeStart);
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  return accepted;
+}
+
+async function flushPromises() {
+  for (let index = 0; index < 12; index++) await Promise.resolve();
+}
+
+test('acknowledges shot start, resets and prepares IMU before starting 3-2-1', async () => {
+  const clock = fakeClock();
+  const events = [];
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onReset: async () => { events.push('reset'); return true; },
+    onPrepare: async () => { events.push('stream-ready'); return true; },
+    onState: (state, detail) => events.push(detail.remaining ? `${state}-${detail.remaining}` : state),
+  });
+
+  assert.equal(await settleStart(cycle, async () => { events.push('busy-ack'); return true; }), true);
+  assert.equal(cycle.state, 'countdown');
+  assert.deepEqual(events, ['preparing', 'busy-ack', 'resetting', 'reset', 'stream-preparing', 'stream-ready', 'countdown-3']);
+  assert.deepEqual(clock.delays, [1000], 'the countdown starts only after reset and stream readiness');
+});
+
+test('holds countdown until START ack, IMU reset completion, and a fresh stream; captures configured window', async () => {
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  };
+  const clock = fakeClock();
+  const startAck = deferred();
+  const reset = deferred();
+  const freshStream = deferred();
+  const events = [];
+  let captureDetail;
+  let resultCount = 0;
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    captureMs: 400,
+    onReset: () => { events.push('reset-requested'); return reset.promise; },
+    onPrepare: () => { events.push('fresh-stream-requested'); return freshStream.promise; },
+    onState: (state, detail) => {
+      events.push(state);
+      if (state === 'capturing') captureDetail = detail;
+    },
+    onResult: () => { resultCount++; },
+  });
+
+  assert.equal(await cycle.start(() => { events.push('start-ack-requested'); return startAck.promise; }), true);
+  await flushPromises();
+  assert.equal(cycle.state, 'preparing');
+  assert.equal(events.includes('reset-requested'), false, 'reset waits for firmware START acknowledgement');
+  assert.equal(events.includes('countdown'), false);
+
+  startAck.resolve(true);
+  await flushPromises();
+  assert.equal(cycle.state, 'resetting');
+  assert.equal(events.includes('fresh-stream-requested'), false);
+  assert.equal(events.includes('countdown'), false, 'countdown cannot begin while reset is pending');
+
+  reset.resolve(true);
+  await flushPromises();
+  assert.equal(cycle.state, 'stream-preparing');
+  assert.equal(events.includes('countdown'), false, 'countdown waits for the first fresh post-reset sample');
+
+  freshStream.resolve(true);
+  await flushPromises();
+  assert.equal(cycle.state, 'countdown');
+  assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: clock.now() }), false,
+    'countdown samples are excluded');
+  await clock.advance(3000);
+  assert.equal(cycle.state, 'capturing');
+  assert.equal(captureDetail.captureMs, 400);
+  assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: clock.now() }), true);
+  await clock.advance(400);
+  assert.equal(resultCount, 1);
+  assert.equal(cycle.lastCaptureMs, 400);
+  assert.ok(events.indexOf('reset-requested') < events.indexOf('fresh-stream-requested'));
+  assert.ok(events.indexOf('fresh-stream-requested') < events.indexOf('countdown'));
+});
 
 test('shows 3-2-1 then captures one complete shot window without recapturing stance', async () => {
   const clock = fakeClock();
@@ -52,10 +141,9 @@ test('shows 3-2-1 then captures one complete shot window without recapturing sta
   });
   // Stance setup belongs to BLE session setup; a shot cycle must never mutate it.
 
-  assert.equal(await cycle.start(), true);
-  await Promise.resolve();
+  assert.equal(await settleStart(cycle), true);
   assert.equal(cycle.state, 'countdown');
-  assert.equal(prepared, 1);
+  assert.equal(prepared, 1, 'stream preparation follows the IMU reset and precedes the countdown');
   await clock.advance(3000);
   assert.equal(cycle.state, 'capturing');
   assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: clock.now() }), true);
@@ -65,12 +153,12 @@ test('shows 3-2-1 then captures one complete shot window without recapturing sta
   assert.deepEqual(results, [{ count: 1 }]);
   assert.equal(guardChanges, 0);
   assert.deepEqual(states.map(item => item.state), [
-    'countdown', 'countdown', 'countdown', 'capturing', 'analyzing', 'ready',
+    'preparing', 'resetting', 'stream-preparing', 'countdown', 'countdown', 'countdown', 'capturing', 'analyzing', 'ready',
   ]);
   assert.deepEqual(states.filter(item => item.state === 'countdown').map(item => item.detail.remaining), [3, 2, 1]);
 });
 
-test('shows countdown while stream preparation is pending and starts capture only after preparation', async () => {
+test('waits for stream preparation after reset and before the countdown', async () => {
   const clock = fakeClock();
   let finishPrepare;
   const cycle = create({
@@ -81,15 +169,106 @@ test('shows countdown while stream preparation is pending and starts capture onl
   });
 
   const started = cycle.start();
-  await Promise.resolve();
-  assert.equal(cycle.state, 'countdown');
-  await clock.advance(3000);
-  assert.equal(cycle.state, 'preparing');
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.equal(cycle.state, 'stream-preparing');
   finishPrepare(true);
   assert.equal(await started, true);
-  await Promise.resolve();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.equal(cycle.state, 'countdown');
+  await clock.advance(3000);
   assert.equal(cycle.state, 'capturing');
   cycle.cancel();
+});
+
+test('waits for reset completion before stream preparation and countdown', async () => {
+  const clock = fakeClock();
+  const states = [];
+  let finishReset;
+  let resets = 0;
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onReset: () => { resets++; return new Promise(resolve => { finishReset = resolve; }); },
+    onState: state => states.push(state),
+  });
+
+  await settleStart(cycle);
+  assert.equal(cycle.state, 'resetting');
+  assert.equal(resets, 1, 'one IMU reset is requested per shot');
+  assert.equal(states.includes('countdown'), false, 'countdown cannot begin before reset completion');
+
+  finishReset(true);
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.equal(cycle.state, 'countdown', 'countdown begins only after firmware confirms reset');
+  await clock.advance(3000);
+  assert.equal(cycle.state, 'capturing');
+});
+
+test('does not let a stale-stream preparation failure skip the per-shot reset', async () => {
+  const clock = fakeClock();
+  const events = [];
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onReset: async () => { events.push('reset'); return true; },
+    onPrepare: async () => { events.push('prepare'); return false; },
+    onState: state => events.push(state),
+  });
+
+  await settleStart(cycle);
+
+  const resetIndex = events.indexOf('reset');
+  const prepareIndex = events.indexOf('prepare');
+  assert.notEqual(resetIndex, -1, 'stale-stream failure must not bypass the per-shot reset');
+  assert.ok(resetIndex < prepareIndex,
+    'the IMU reset must complete before stream readiness can fail');
+  assert.equal(events.includes('error'), true, 'failed stream preparation remains visible');
+  assert.equal(cycle.state, 'error');
+});
+
+test('returns to READY after one result and requests one reset before each shot countdown', async () => {
+  const clock = fakeClock();
+  const resets = [];
+  const results = [];
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onReset: async () => { resets.push(clock.now()); return true; },
+    onResult: (_result, _samples, detail) => results.push(detail),
+  });
+
+  for (let index = 0; index < 2; index++) {
+    assert.equal(await settleStart(cycle), true);
+    assert.equal(resets.length, index + 1, 'the IMU reset completes before this shot countdown begins');
+    await clock.advance(3000);
+    assert.equal(cycle.state, 'capturing');
+    cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: clock.now() });
+    await clock.advance(1000);
+    assert.equal(cycle.state, 'ready');
+  }
+
+  assert.equal(resets.length, 2, 'each shot resets exactly once before its countdown');
+  assert.equal(results.length, 2, 'one capture result is produced per START cycle');
+});
+
+test('keeps the device locked when the per-shot sensor reset fails', async () => {
+  const clock = fakeClock();
+  const states = [];
+  const cycle = create({
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onReset: async () => false,
+    onState: state => states.push(state),
+  });
+
+  await settleStart(cycle);
+  assert.equal(cycle.state, 'reset-failed');
+  assert.equal(states.includes('capturing'), false);
+  assert.equal(await cycle.start(), false, 'a new shot cannot start until the failed reset is recovered');
 });
 
 test('passes an isolated copy of captured quaternion samples with the result', async () => {
@@ -102,7 +281,7 @@ test('passes an isolated copy of captured quaternion samples with the result', a
     onResult: (_result, samples) => { reportedSamples = samples; },
   });
 
-  await cycle.start();
+  await settleStart(cycle);
   await clock.advance(3000);
   const sample = { w: 1, x: 0, y: 0, z: 0, t: clock.now() };
   cycle.addSample(sample);
@@ -125,7 +304,7 @@ test('configured windows include only their timestamp range and produce one resu
       onResult: (result, samples, detail) => reported.push({ result, samples, detail }),
     });
 
-    await cycle.start();
+    await settleStart(cycle);
     await clock.advance(3000);
     const captureStart = clock.now();
     assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: captureStart - 1 }), false);
@@ -158,7 +337,7 @@ test('rejects post-window packets even when the capture timer callback is delaye
     captureMs: 400,
     analyze: samples => { analyzed = samples; return {}; },
   });
-  await cycle.start();
+  await settleStart(cycle);
   await clock.advance(3000);
   const start = clock.now();
   assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: start }), true);
@@ -180,7 +359,7 @@ test('capture timestamps start when the capture state opens', async () => {
     captureMs: 400,
     onResult: (_result, samples) => { captured = samples; },
   });
-  await cycle.start();
+  await settleStart(cycle);
   await clock.advance(3000);
   const start = clock.now();
   assert.equal(cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: start }), true);
@@ -202,7 +381,7 @@ test('uses configured 525 ms capture duration and rejects unsupported windows', 
   });
 
   assert.equal(cycle.setCaptureMs(525), true);
-  await cycle.start();
+  await settleStart(cycle);
   await clock.advance(3000);
   assert.equal(captureDetail.captureMs, 525);
   await clock.advance(524);
@@ -227,7 +406,7 @@ test('latches one capture duration per shot and reports its actual sample count'
     onState: (state, detail) => states.push({ state, detail }),
   });
 
-  await cycle.start();
+  await settleStart(cycle);
   assert.equal(cycle.setCaptureMs(900), true, 'a later setting is accepted for the next shot');
   await clock.advance(3000);
   assert.equal(states.find(item => item.state === 'capturing').detail.captureMs, 400,
@@ -248,7 +427,7 @@ test('latches one capture duration per shot and reports its actual sample count'
     sampleCount: 20, captureMs: 400, sampleSpanMs: 380, context: null,
   });
 
-  await cycle.start();
+  await settleStart(cycle);
   await clock.advance(3000);
   assert.equal(states.filter(item => item.state === 'capturing').at(-1).detail.captureMs, 900,
     'the new window takes effect on the following shot');
@@ -264,7 +443,7 @@ test('does not retain countdown samples or accept samples after the capture wind
     clearTimeout: clock.clearTimeout,
     analyze: samples => { analyzed = samples; return {}; },
   });
-  await cycle.start();
+  await settleStart(cycle);
   cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: 0 });
   await clock.advance(3000);
   cycle.addSample({ w: 1, x: 0, y: 0, z: 0, t: 3000 });
@@ -283,7 +462,7 @@ test('cancelling during countdown clears pending work and prevents a result', as
     clearTimeout: clock.clearTimeout,
     analyze: () => { analyzed = true; return {}; },
   });
-  await cycle.start();
+  await settleStart(cycle);
   cycle.cancel();
   await clock.advance(5000);
   assert.equal(cycle.state, 'ready');
@@ -299,14 +478,12 @@ test('preparation failure is surfaced and a later shot can be retried', async ()
     clearTimeout: clock.clearTimeout,
     onPrepare: async () => !fail,
   });
-  await cycle.start();
-  await Promise.resolve();
-  await Promise.resolve();
+  await settleStart(cycle);
+  await clock.advance(3000);
   assert.equal(cycle.state, 'error');
 
   fail = false;
-  assert.equal(await cycle.start(), true);
-  await Promise.resolve();
+  assert.equal(await settleStart(cycle), true);
   await clock.advance(3000);
   assert.equal(cycle.state, 'capturing');
   await clock.advance(1000);

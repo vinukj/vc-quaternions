@@ -5,7 +5,8 @@
  *   1. Read QMI8658 at 200 Hz (fixed 5 ms intervals).
  *   2. Feed accel/gyro into Madgwick (6-axis, beta=0.1) -> quaternion.
  *   3. Detect bat swings on-device (gyro mag > 300 dps) and set flag bit0.
- *   4. Stream quaternion over BLE notify at 50 Hz (every 4th IMU sample).
+ *   4. Stream quaternion over BLE notify at the selected cadence
+ *      (default every 4th IMU sample = 50 Hz; 0x0B selects 4/3/2/1).
  *   5. Optional: light sleep between packets for power saving.
  *
  * Thread sharing: s_current_q / s_current_q_valid are written by this task
@@ -32,8 +33,6 @@
 /* ---- Config per vc.md spec ---- */
 #define IMU_SAMPLE_HZ         200
 #define IMU_INTERVAL_MS        5           /* 1 / 200 Hz */
-#define BLE_NOTIFY_HZ          50          /* stream @ 50 Hz */
-#define NOTIFY_SKIP            4           /* every 4th sample */
 #define SWING_THRESHOLD_DPS   300.0f       /* on-device swing detection */
 
 #define FILTER_BETA          0.1f          /* Madgwick beta */
@@ -54,6 +53,7 @@ qmi8658_sample_t s_imu_sample;
 /* Guard trigger from external (e.g. a pin or another task). */
 static volatile bool s_guard_requested = false;
 volatile bool s_filter_reset_requested = false;
+static volatile bool s_sensor_reset_requested = false;
 
 /* ---- Madgwick state ---- */
 static madgwick_state_t s_filter;
@@ -84,6 +84,11 @@ bool imu_bluetooth_get_current_quaternion(madgwick_quaternion_t *out)
 void imu_bluetooth_request_filter_reset(void)
 {
     __atomic_store_n(&s_filter_reset_requested, true, __ATOMIC_RELEASE);
+}
+
+void imu_bluetooth_request_sensor_reset(void)
+{
+    __atomic_store_n(&s_sensor_reset_requested, true, __ATOMIC_RELEASE);
 }
 
 /* ---- Swing detection state ---- */
@@ -197,6 +202,31 @@ static void imu_bluetooth_task(void *pv)
             madgwick_set_interval_ms(&s_filter, IMU_INTERVAL_MS);
         }
 
+        /* Only this task owns QMI8658 I2C. Preserve the BLE link and the
+         * session-relative filter/stance frame across sensor resets. */
+        bool sensor_reset_req = __atomic_exchange_n(&s_sensor_reset_requested,
+                                                     false, __ATOMIC_ACQ_REL);
+        if (sensor_reset_req) {
+            s_imu_sample = (qmi8658_sample_t){0};
+            s_in_swing = false;
+            s_swing_start_pending = false;
+            s_peak_gyro_dps = 0.0f;
+            s_swing_start_us = 0;
+
+            ret = qmi8658_soft_reset();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "QMI8658-only reset failed: %s; MCU and BLE remain running",
+                         esp_err_to_name(ret));
+                ble_server_set_sensor_reset_result(false);
+            } else {
+                ESP_LOGI(TAG, "QMI8658 reset complete; preserving stance and filter frame");
+                ble_server_set_sensor_reset_result(true);
+            }
+            /* Do not fuse a pre-reset sample after this asynchronous request. */
+            last_wake = xTaskGetTickCount();
+            continue;
+        }
+
         /* Check external guard trigger (e.g. from a UI task). */
         bool guard_req = __atomic_exchange_n(&s_guard_requested, false,
                                                __ATOMIC_ACQ_REL);
@@ -238,16 +268,17 @@ static void imu_bluetooth_task(void *pv)
         float peak = 0.0f;
         update_swing_flags(&flags, &peak);
 
-        /* BLE stream at 50 Hz (every 4th IMU sample). */
-        if (++sample_count % NOTIFY_SKIP == 0) {
-            /* Latch the 200 Hz onset until a 50 Hz notification carries it. */
+        /* BLE stream at the selected cadence (default every 4th = 50 Hz). */
+        const uint8_t notify_skip = ble_server_get_notify_skip();
+        if (++sample_count % notify_skip == 0) {
+            /* Latch the 200 Hz onset until a notification carries it. */
             s_swing_start_pending = s_swing_start_pending || ((flags & 0x01) != 0);
             ble_server_notify_quaternion(&q,
                                          s_swing_start_pending ? 0x01 : 0x00);
             s_swing_start_pending = false;
             notify_count++;
             if (notify_count % 50 == 0) {
-                ESP_LOGI(TAG, "BLE stream %u packets sent, swings=%u",
+                ESP_LOGD(TAG, "BLE stream %u packets sent, swings=%u",
                          (unsigned)notify_count,
                          (unsigned)imu_bluetooth_get_swing_count());
             }

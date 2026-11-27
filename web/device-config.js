@@ -10,6 +10,14 @@
   const CAPTURE_WINDOWS = [400, 500, 525, 600, 700, 800, 900];
   const CONFIG_LENGTH = 8;
   const STATE_LENGTH = 26;
+  // sampcnt command byte -> BLE notify divisor (IMU fusion stays at 200 Hz).
+  const SAMPCNT_COMMAND = 0x0B;
+  const SAMPcnt_TO_SKIP = { 1: 4, 2: 3, 3: 2, 4: 1 };
+  const SAMPcnt_TO_HZ = { 1: 50, 2: 67, 3: 100, 4: 200 };
+
+  function sampcntToHz(sampcnt) {
+    return 200 / (SAMPcnt_TO_SKIP[sampcnt] || 4);
+  }
 
   function encode(sequence, config) {
     if (!Number.isInteger(sequence) || sequence < 0 || sequence > 255) throw new RangeError('sequence must be a byte');
@@ -43,6 +51,9 @@
       bowled_prob: bytes[5],
       edge_base_prob: bytes[6],
       capture_window_ms: view.getUint16(7, true),
+      imuResetStatus: ['idle', 'pending', 'complete', 'failed'][bytes[9] & 0x03],
+      shotState: ['ready', 'start_requested', 'in_progress', 'unknown'][(bytes[9] >> 2) & 0x03],
+      sampcnt: ((bytes[9] >> 4) & 0x03) + 1,
       guard: {
         w: view.getFloat32(10, true),
         x: view.getFloat32(14, true),
@@ -58,5 +69,6 @@
       state.edge_base_prob === config.edge_base_prob && state.capture_window_ms === config.capture_window_ms;
   }
 
-  return { MAGIC, VERSION, DIFFICULTIES, CAPTURE_WINDOWS, CONFIG_LENGTH, STATE_LENGTH, encode, decode, matches };
+  return { MAGIC, VERSION, DIFFICULTIES, CAPTURE_WINDOWS, CONFIG_LENGTH, STATE_LENGTH,
+    SAMPCNT_COMMAND, SAMPcnt_TO_SKIP, SAMPcnt_TO_HZ, sampcntToHz, encode, decode, matches };
 });

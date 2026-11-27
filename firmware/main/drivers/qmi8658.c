@@ -120,11 +120,16 @@ esp_err_t qmi8658_soft_reset(void)
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    /* Re-apply configuration after reset. */
-    ESP_ERROR_CHECK(reg_write(REG_CTRL1, QMI_CTRL1_VAL));
-    ESP_ERROR_CHECK(reg_write(REG_CTRL2, QMI_CTRL2_VAL));
-    ESP_ERROR_CHECK(reg_write(REG_CTRL3, QMI_CTRL3_VAL));
-    ESP_ERROR_CHECK(reg_write(REG_CTRL7, QMI_CTRL7_VAL));
+    /* Re-apply configuration; an I2C error must not reboot the ESP32 or
+     * tear down the independent BLE host. */
+    ret = reg_write(REG_CTRL1, QMI_CTRL1_VAL);
+    if (ret == ESP_OK) ret = reg_write(REG_CTRL2, QMI_CTRL2_VAL);
+    if (ret == ESP_OK) ret = reg_write(REG_CTRL3, QMI_CTRL3_VAL);
+    if (ret == ESP_OK) ret = reg_write(REG_CTRL7, QMI_CTRL7_VAL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "soft reset configuration failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     vTaskDelay(pdMS_TO_TICKS(20));
     ESP_LOGI(TAG, "QMI8658 soft reset + reinit done");

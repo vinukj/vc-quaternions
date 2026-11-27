@@ -11,9 +11,9 @@
  *   - Sample rate: 200 Hz
  *
  * Data ready / low-power: the QMI8658 has an internal FIFO and a DRR (data
- * ready) interrupt pin. For simplicity we poll via I2C burst reads; the
- * soft-reset re-init path (qmi8658_soft_reset()) keeps gyro bias in check
- * between shots and after a "Take Guard" reference capture.
+ * ready) interrupt pin. For simplicity we poll via I2C burst reads. A sensor
+ * soft reset restores its register configuration; it is not gyro-bias
+ * calibration and cannot eliminate 6-axis yaw drift.
  *
  * Reference: QMI8658 datasheet, Rev. 1.3 — register map below.
  */
@@ -109,7 +109,8 @@ esp_err_t qmi8658_read_ready(qmi8658_sample_t *out);
 
 /**
  * Soft-reset the sensor and re-apply CTRL2/CTRL3/CTRL7 configuration.
- * Call before each capture or after "Take Guard" to clear gyro bias drift.
+ * Call between capture windows to reset the sensor hardware only. This does
+ * not calibrate gyro bias or reset the ESP32, BLE connection, stance, or filter.
  * Takes ~30 ms (10 ms reset + 20 ms settling). Safe to call from the IMU task.
  */
 esp_err_t qmi8658_soft_reset(void);

@@ -36,7 +36,7 @@ test('maps eight field sectors into the five batter-relative direction zones', (
     ['Up-right', 'Offside front'],
     ['Right', 'Offside back'],
     ['Down-right', 'Offside back'],
-    ['Down', 'Behind wicket'],
+    ['Down', 'Behind batter'],
     ['Down-left', 'Legside back'],
     ['Left', 'Legside back'],
     ['Up-left', 'Legside front'],

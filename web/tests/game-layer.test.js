@@ -8,6 +8,7 @@ test('provides the agreed defaults and normalizes invalid config values', () => 
     bowled_prob: 3,
     edge_base_prob: 10,
     capture_window_ms: 525,
+    sampcnt: 1,
   });
   assert.deepEqual(GameLayer.normalizeConfig({
     difficulty: 'unknown', bowled_prob: 150, edge_base_prob: -4, capture_window_ms: 425,

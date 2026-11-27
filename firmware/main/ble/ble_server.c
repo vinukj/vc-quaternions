@@ -11,6 +11,7 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "imu_bluetooth_task.h"
+#include "shot_state_transition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -90,6 +91,8 @@ static uint16_t s_chr_state_handle;
 static uint8_t s_own_addr_type;
 static bool s_streaming;
 static uint32_t s_shot_state;
+static uint8_t s_sensor_reset_status;
+static bool s_sensor_reset_command_accepted;
 
 /* Last sent packet (also returned on READ for backward-compat). */
 static ble_notify_packet_t s_last_packet;
@@ -108,6 +111,9 @@ static uint8_t s_difficulty;
 static uint8_t s_bowled_probability = 3;
 static uint8_t s_edge_probability = 10;
 static uint16_t s_capture_window_ms = 525;
+/* Sampling cadence: how often quaternions are sent over BLE (IMU fusion stays
+ * at 200 Hz). sampcnt 1..4 -> notify every 4th/3rd/2nd/1st sample. */
+static uint8_t s_sampcnt = 1;
 
 /* Device identity. */
 static char s_device_name[32] = "CricketBat";
@@ -132,6 +138,11 @@ bool ble_server_is_streaming(void)
     return __atomic_load_n(&s_streaming, __ATOMIC_ACQUIRE);
 }
 
+uint8_t ble_server_get_notify_skip(void)
+{
+    return shot_state_sampcnt_to_skip(s_sampcnt);
+}
+
 ble_shot_state_t ble_server_get_shot_state(void)
 {
     return (ble_shot_state_t)__atomic_load_n(&s_shot_state, __ATOMIC_ACQUIRE);
@@ -144,6 +155,17 @@ bool ble_server_is_start_ready(void)
     const bool session_ready = s_config_accepted && s_guard_active;
     xSemaphoreGive(s_notify_lock);
     return session_ready && ble_server_get_shot_state() == BLE_SHOT_READY;
+}
+
+void ble_server_set_sensor_reset_result(bool succeeded)
+{
+    if (!s_notify_lock || xSemaphoreTake(s_notify_lock, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Cannot publish IMU reset result: BLE state lock unavailable");
+        return;
+    }
+    shot_sensor_reset_result(&s_sensor_reset_status, succeeded);
+    if (!succeeded) s_sensor_reset_command_accepted = false;
+    xSemaphoreGive(s_notify_lock);
 }
 
 bool ble_server_request_shot_start(void)
@@ -232,7 +254,8 @@ static int state_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     state[5] = s_bowled_probability;
     state[6] = s_edge_probability;
     write_le16(state + 7, s_capture_window_ms);
-    /* Byte 9 is reserved for future flags; stance quaternion begins at 10. */
+    state[9] = shot_state_pack_status(
+        ble_server_get_shot_state(), s_sensor_reset_status, s_sampcnt);
     write_le_float(state + 10, s_guard_q.w);
     write_le_float(state + 14, s_guard_q.x);
     write_le_float(state + 18, s_guard_q.y);
@@ -285,6 +308,20 @@ static int accept_config_frame(const uint8_t *frame, uint16_t length)
     return 0;
 }
 
+static int accept_sampcnt(uint8_t sampcnt)
+{
+    if (sampcnt < 1 || sampcnt > 4) {
+        ESP_LOGW(TAG, "Rejected invalid sampcnt %u (expected 1..4)", (unsigned)sampcnt);
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    if (!s_notify_lock || xSemaphoreTake(s_notify_lock, portMAX_DELAY) != pdTRUE) return BLE_ATT_ERR_UNLIKELY;
+    s_sampcnt = sampcnt;
+    xSemaphoreGive(s_notify_lock);
+    ESP_LOGI(TAG, "Sampling cadence accepted: sampcnt=%u -> notify every %u sample(s)",
+             (unsigned)sampcnt, (unsigned)shot_state_sampcnt_to_skip(sampcnt));
+    return 0;
+}
+
 static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                          struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -309,6 +346,9 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
     if (len == CONFIG_PAYLOAD_SIZE && buf[0] == CONFIG_MAGIC) {
         return accept_config_frame(buf, len);
+    }
+    if (len == 2 && buf[0] == 0x0B) {
+        return accept_sampcnt(buf[1]);
     }
     if (len != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
@@ -445,6 +485,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                 s_guard_q = (madgwick_quaternion_t){1.0f, 0.0f, 0.0f, 0.0f};
                 s_guard_active = false;
                 s_config_accepted = false;
+                s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+                s_sensor_reset_command_accepted = false;
                 xSemaphoreGive(s_notify_lock);
             }
             ESP_LOGI(TAG, "Central connected, handle=%d",
@@ -468,6 +510,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                 s_guard_q = (madgwick_quaternion_t){1.0f, 0.0f, 0.0f, 0.0f};
                 s_guard_active = false;
                 s_config_accepted = false;
+                s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+                s_sensor_reset_command_accepted = false;
                 xSemaphoreGive(s_notify_lock);
             }
             start_advertising();
@@ -485,6 +529,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
             s_guard_q = (madgwick_quaternion_t){1.0f, 0.0f, 0.0f, 0.0f};
             s_guard_active = false;
             s_config_accepted = false;
+            s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+            s_sensor_reset_command_accepted = false;
             xSemaphoreGive(s_notify_lock);
         }
         start_advertising();
@@ -633,15 +679,29 @@ esp_err_t ble_server_handle_command(uint8_t cmd)
             }
             if (!captured) {
                 ESP_LOGW(TAG, "Take Guard ignored — no valid quaternion yet");
+            } else {
+                /* Preserve the captured reference; reset only via the IMU owner task. */
+                imu_bluetooth_request_sensor_reset();
             }
             return captured ? ESP_OK : ESP_ERR_INVALID_STATE;
         }
 
     case 0x04:   /* Clear Reference — revert to absolute orientation */
-        ESP_LOGI(TAG, "CMD 0x04 Clear reference");
-        xSemaphoreTake(s_notify_lock, portMAX_DELAY);
-        s_guard_active = false;
+        if (!s_notify_lock || xSemaphoreTake(s_notify_lock, portMAX_DELAY) != pdTRUE) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const bool rearmed = shot_state_clear_reference(
+            &s_shot_state, &s_sensor_reset_status,
+            &s_sensor_reset_command_accepted);
+        if (rearmed) s_guard_active = false;
+        const uint8_t reset_status = s_sensor_reset_status;
         xSemaphoreGive(s_notify_lock);
+        if (!rearmed) {
+            ESP_LOGW(TAG, "CMD 0x04 rejected — IMU reset still pending");
+            return ESP_ERR_INVALID_STATE;
+        }
+        ESP_LOGI(TAG, "CMD 0x04 Clear reference; shot state re-armed (reset_status=%u)",
+                 (unsigned)reset_status);
         return ESP_OK;
 
     case 0x05:   /* Start stream — enable BLE notifications */
@@ -655,14 +715,50 @@ esp_err_t ble_server_handle_command(uint8_t cmd)
         return ESP_OK;
 
     case 0x08:   /* Browser accepted the LCD start request. */
-        __atomic_store_n(&s_shot_state, BLE_SHOT_IN_PROGRESS, __ATOMIC_RELEASE);
-        ESP_LOGI(TAG, "CMD 0x08 Shot in progress");
+        if (shot_state_enter(&s_shot_state, BLE_SHOT_IN_PROGRESS,
+                             BLE_SHOT_IN_PROGRESS)) {
+            if (s_notify_lock && xSemaphoreTake(s_notify_lock, portMAX_DELAY) == pdTRUE) {
+                s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+                s_sensor_reset_command_accepted = false;
+                xSemaphoreGive(s_notify_lock);
+            }
+            ESP_LOGI(TAG, "CMD 0x08 Shot in progress; reset latch cleared");
+        } else {
+            ESP_LOGW(TAG, "CMD 0x08 duplicate; shot already in progress");
+        }
         return ESP_OK;
 
     case 0x09:   /* Browser has displayed the result; accept another touch. */
         __atomic_store_n(&s_shot_state, BLE_SHOT_READY, __ATOMIC_RELEASE);
+        if (s_notify_lock && xSemaphoreTake(s_notify_lock, portMAX_DELAY) == pdTRUE) {
+            s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+            s_sensor_reset_command_accepted = false;
+            xSemaphoreGive(s_notify_lock);
+        }
         ESP_LOGI(TAG, "CMD 0x09 Shot ready");
         return ESP_OK;
+
+    case 0x0A: { /* Reset the sensor before the browser countdown. */
+        if (!s_notify_lock || xSemaphoreTake(s_notify_lock, portMAX_DELAY) != pdTRUE) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const uint32_t shot_state = ble_server_get_shot_state();
+        const uint8_t current_reset_status = s_sensor_reset_status;
+        const bool reset_was_accepted = s_sensor_reset_command_accepted;
+        const bool requested = shot_sensor_reset_request(
+            shot_state, BLE_SHOT_IN_PROGRESS,
+            &s_sensor_reset_command_accepted, &s_sensor_reset_status);
+        xSemaphoreGive(s_notify_lock);
+        if (!requested) {
+            ESP_LOGW(TAG, "CMD 0x0A rejected — shot_state=%u reset_status=%u reset_accepted=%u",
+                     (unsigned)shot_state, (unsigned)current_reset_status,
+                     reset_was_accepted ? 1U : 0U);
+            return ESP_ERR_INVALID_STATE;
+        }
+        imu_bluetooth_request_sensor_reset();
+        ESP_LOGI(TAG, "CMD 0x0A IMU-only reset requested before countdown");
+        return ESP_OK;
+    }
 
     default:
         ESP_LOGW(TAG, "Unknown command 0x%02X", cmd);
@@ -748,11 +844,14 @@ void ble_server_init(void)
     s_guard_q = (madgwick_quaternion_t){1.0f, 0.0f, 0.0f, 0.0f};
     s_guard_active = false;
     s_config_accepted = false;
+    s_sensor_reset_status = SHOT_SENSOR_RESET_IDLE;
+    s_sensor_reset_command_accepted = false;
     s_config_sequence = 0;
     s_difficulty = 0;
     s_bowled_probability = 3;
     s_edge_probability = 10;
     s_capture_window_ms = 525;
+    s_sampcnt = 1;
     __atomic_store_n(&s_streaming, false, __ATOMIC_RELEASE);
     __atomic_store_n(&s_shot_state, BLE_SHOT_READY, __ATOMIC_RELEASE);
 
@@ -788,5 +887,5 @@ void ble_server_init(void)
     }
 
     nimble_port_freertos_init(nimble_host_task);
-    ESP_LOGI(TAG, "BLE server initialized — 17-byte quaternion stream @ 50 Hz");
+    ESP_LOGI(TAG, "BLE server initialized — 17-byte quaternion stream @ 50 Hz default");
 }
